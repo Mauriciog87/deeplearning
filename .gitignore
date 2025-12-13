@@ -1,0 +1,76 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual environments
+venv/
+ENV/
+.venv/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# IDE / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Secrets
+.env
+
+# Data files
+data/*.db
+data/*.sqlite
+data/*.db3
+data/capture_preview.png
+data/*.sql
+data/*.dump
+!data/roulette_dump.sql
+
+# Documentation folder
+docs/
+
+# Ignore GitHub folder (workflows and instructions not tracked in this repo)
+.github/
+
+# Dump files and config snapshots
+*.dump
+
+# Models (do not commit trained model files)
+models/*
+!models/.gitkeep
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos.
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.pytest_cache/
+.coverage
+
+# Misc
+*.log
+
+# Ignore runtime files
+*.pid
+
+# Keep README, source, and script files only
+

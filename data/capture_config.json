@@ -1,0 +1,22 @@
+{
+  "region_x": -837,
+  "region_y": 448,
+  "region_width": 113,
+  "region_height": 61,
+  "check_interval": 0.5,
+  "change_threshold": 0.05,
+  "post_detection_pause": 20.0,
+  "min_confidence": 0.4,
+  "use_gpu": true,
+  "reconnect_x": -1001,
+  "reconnect_y": 618,
+  "reconnect_width": 215,
+  "reconnect_height": 29,
+  "inactivity_timeout": 60.0,
+  "history_x": -416,
+  "history_y": 896,
+  "history_width": 227,
+  "history_height": 33,
+  "reconcile_after_reconnect": true,
+  "reconcile_count": 5
+}
