@@ -694,6 +694,43 @@ def metrics_cmd(args):
     return 0
 
 
+def evaluate_cmd(args):
+    from src.database import RouletteRepository
+    from src.utils.evaluation_harness import (
+        EvaluationConfig,
+        evaluate_walk_forward,
+        format_evaluation_report,
+    )
+
+    repo = RouletteRepository()
+
+    if args.session:
+        numbers = repo.get_numbers_by_session(args.session)
+    else:
+        numbers = repo.get_all_numbers()
+
+    config = EvaluationConfig(
+        training_window=args.train_window,
+        testing_window=args.test_window,
+        step_size=args.step,
+        bet_top_n=args.bet_top_n,
+        seed=args.seed,
+        model_path=args.model,
+    )
+    required = config.training_window + config.testing_window
+
+    if len(numbers) < required:
+        print(
+            f"Se necesitan al menos {required} spins para evaluate "
+            f"(tiene {len(numbers)})"
+        )
+        return 1
+
+    result = evaluate_walk_forward(numbers, config)
+    print(format_evaluation_report(result))
+    return 0
+
+
 def kelly_cmd(args):
     from src.utils.backtesting import kelly_criterion, PAYOUTS, BetType
     
@@ -881,6 +918,15 @@ Ejemplos:
     metrics_parser = subparsers.add_parser('metrics', help='Métricas de distribución (JSD, Wasserstein)')
     metrics_parser.add_argument('--session', '-s', type=int, help='ID de sesión')
     metrics_parser.add_argument('--sigma', type=float, default=2.0, help='Umbral sigma para anomalías')
+
+    evaluate_parser = subparsers.add_parser('evaluate', help='Walk-forward evaluation del motor completo')
+    evaluate_parser.add_argument('--session', '-s', type=int, help='ID de sesión')
+    evaluate_parser.add_argument('--train-window', type=int, default=500, help='Ventana de entrenamiento')
+    evaluate_parser.add_argument('--test-window', type=int, default=100, help='Ventana de testing')
+    evaluate_parser.add_argument('--step', type=int, default=100, help='Paso entre folds')
+    evaluate_parser.add_argument('--bet-top-n', type=int, default=5, help='Cantidad de números apostados por predicción')
+    evaluate_parser.add_argument('--seed', type=int, default=42, help='Seed para baseline random')
+    evaluate_parser.add_argument('--model', help='Path opcional a modelo DQN')
     
     kelly_parser = subparsers.add_parser('kelly', help='Calculadora Kelly Criterion')
     kelly_parser.add_argument('--probability', '-p', type=float, required=True, help='Probabilidad de ganar (0-1)')
@@ -931,6 +977,8 @@ Ejemplos:
         return backtest_cmd(args)
     elif args.command == 'metrics':
         return metrics_cmd(args)
+    elif args.command == 'evaluate':
+        return evaluate_cmd(args)
     elif args.command == 'kelly':
         return kelly_cmd(args)
     elif args.command == 'statistics':
