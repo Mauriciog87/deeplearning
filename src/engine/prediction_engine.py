@@ -2,10 +2,10 @@ import threading
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any, Callable
-from collections import Counter
 import numpy as np
 
 from src.utils.predictor import LSTMPredictor, RoulettePredictor, ExtraTreesPredictor, FAIR_PROBABILITY
+from src.utils.bias_aware_predictor import BiasAwarePredictor
 from src.database.models import Spin
 
 
@@ -79,6 +79,7 @@ class PredictionEngine:
         self.lstm_predictor = LSTMPredictor(sequence_length=10, force_gpu=True)
         self.dqn_predictor = RoulettePredictor(model_path=model_path, use_extra_trees=False)
         self.extra_trees_predictor = ExtraTreesPredictor()
+        self.bias_aware_predictor = BiasAwarePredictor()
         
         self.history: List[int] = []
         self.stats: Dict[PredictorType, PredictorStats] = {
@@ -182,18 +183,22 @@ class PredictionEngine:
         )
     
     def _predict_bias(self) -> Optional[FullPrediction]:
-        if len(self.history) < 50:
+        result = self.bias_aware_predictor.fit_predict(self.history)
+
+        if not result.is_significant:
             return None
-        
-        counter = Counter(self.history)
-        total = len(self.history)
-        
-        number_probs = {i: counter.get(i, 0) / total for i in range(37)}
-        
+
+        number_probs = result.number_probs
         cat_probs = self._compute_category_probabilities(number_probs)
-        
-        top_numbers = sorted(number_probs.items(), key=lambda x: x[1], reverse=True)[:10]
-        
+
+        top_numbers = [
+            (number, number_probs[number])
+            for number in result.selected_numbers
+            if number in number_probs
+        ]
+        if not top_numbers:
+            top_numbers = sorted(number_probs.items(), key=lambda x: x[1], reverse=True)[:10]
+
         best_number = top_numbers[0] if top_numbers else (0, FAIR_PROBABILITY)
         best_color = max(cat_probs["color"].items(), key=lambda x: x[1])
         best_parity = max([(k, v) for k, v in cat_probs["parity"].items() if k != "zero"], key=lambda x: x[1])

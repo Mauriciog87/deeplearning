@@ -587,6 +587,7 @@ def backtest_cmd(args):
         walk_forward_optimization,
         create_bias_strategy,
         create_hot_numbers_strategy,
+        create_last_n_bunching_strategy,
         format_backtest_report
     )
     
@@ -614,6 +615,8 @@ def backtest_cmd(args):
         strategy_fn = create_bias_strategy(0.03)
     elif strategy == "hot":
         strategy_fn = create_hot_numbers_strategy(5)
+    elif strategy == "last-n":
+        strategy_fn = create_last_n_bunching_strategy()
     else:
         strategy_fn = create_bias_strategy(0.03)
     
@@ -868,7 +871,7 @@ Ejemplos:
     
     backtest_parser = subparsers.add_parser('backtest', help='Backtesting de estrategias')
     backtest_parser.add_argument('--session', '-s', type=int, help='ID de sesión')
-    backtest_parser.add_argument('--strategy', choices=['bias', 'hot', 'cold'], default='bias', help='Estrategia')
+    backtest_parser.add_argument('--strategy', choices=['bias', 'hot', 'cold', 'last-n'], default='bias', help='Estrategia')
     backtest_parser.add_argument('--balance', type=float, default=1000.0, help='Balance inicial')
     backtest_parser.add_argument('--bet', type=float, default=1.0, help='Monto por apuesta')
     backtest_parser.add_argument('--walk-forward', action='store_true', help='Usar walk-forward optimization')

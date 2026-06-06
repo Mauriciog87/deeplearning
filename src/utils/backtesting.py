@@ -505,6 +505,25 @@ def create_hot_numbers_strategy(top_n: int = 5) -> Callable[[List[int]], List[in
     return strategy
 
 
+def create_last_n_bunching_strategy(
+    last_n: int = 18,
+    max_numbers: int = 12
+) -> Callable[[List[int]], List[int]]:
+    def strategy(train_data: List[int]) -> List[int]:
+        recent = train_data[-last_n:]
+        selected = []
+
+        for number in reversed(recent):
+            if number not in selected:
+                selected.append(number)
+            if len(selected) >= max_numbers:
+                break
+
+        return list(reversed(selected))
+
+    return strategy
+
+
 def create_cold_numbers_strategy(top_n: int = 5) -> Callable[[List[int]], List[int]]:
     """
     Create a strategy that bets on cold numbers (Gambler's Fallacy).
@@ -531,6 +550,7 @@ def compare_strategies(
     """
     strategies = {
         "bias_3pct": create_bias_strategy(0.03),
+        "last_n_bunching": create_last_n_bunching_strategy(),
         "hot_5": create_hot_numbers_strategy(5),
         "cold_5": create_cold_numbers_strategy(5),
         "random_5": lambda x: list(np.random.choice(37, 5, replace=False))
