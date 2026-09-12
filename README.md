@@ -156,6 +156,8 @@ Experimental change detectors are available in `src.utils.change_detection`. `Ca
 
 `src.utils.online_recalibration.OnlineRecalibrator` provides an optional Blackwell/ORCA-style experiment using a fixed RBF calibration basis and Brier/2 regret against one baseline. Call `forecast` before `update`. Each forecast records the worst halfspace payoff across all 37 possible outcomes before the label arrives. Positive oracle residuals remain visible and enter the empirical residual bound. The optimizer is approximate and the calibration basis is finite; the experiment does not claim unconditional full calibration or no regret. Saved state includes pending forecasts and validates their residuals on replay.
 
+`evaluate --online-recalibration --online-iterations 100` adds an online variant for each available engine forecast. Its state continues across test folds within a session and starts separately for each session and training run. Rows record the pre-outcome oracle residual; the manifest exports the complete state and aggregate diagnostics.
+
 OCR observations retain event IDs, timestamps, confidence and pending/accepted state. History reconciliation uses sequence overlap and preserves repeated numbers when they represent separate events. Ambiguous or low-confidence observations remain pending for review; they are not silently inserted. A green background alone is not recognized as zero.
 
 Capture advances its local history only after persistence acknowledges the event. Retrying an event does not create another spin. Stop cancels waits and prevents a restart while an earlier worker is alive. Capture-region settings live in `data/capture_config.json`.

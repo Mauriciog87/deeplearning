@@ -5,6 +5,8 @@ import numpy as np
 from scipy.optimize import check_grad
 
 from src.utils.online_recalibration import OnlineRecalibrator
+from src.utils.evaluation_harness import EvaluationConfig, evaluate_walk_forward
+from src.datasets import EvaluationSession
 
 
 class OnlineRecalibrationTests(unittest.TestCase):
@@ -74,6 +76,24 @@ class OnlineRecalibrationTests(unittest.TestCase):
         state['pending']['oracle_nonpositive'] = True
         with self.assertRaises(ValueError):
             OnlineRecalibrator.from_state(state)
+
+    def test_evaluation_keeps_online_state_across_folds_but_not_sessions(self):
+        sessions = [EvaluationSession(str(number), tuple([number] * 210)) for number in (7, 8)]
+        config = EvaluationConfig(training_window=200, testing_window=5, step_size=5, models=('bias',),
+                                  runs=1, online_recalibration=True, online_iterations=3, compute_intervals=False)
+        result = evaluate_walk_forward(sessions, config)
+        records = [record for record in result.manifest['online_recalibration'] if record['model'] == 'bias']
+        self.assertEqual(len(records), 2)
+        for record in records:
+            self.assertEqual(record['report']['observations'], 10)
+            self.assertIsNone(record['report']['pending_event_id'])
+            history = record['state']['events']
+            self.assertEqual([item[1]['decision']['previous_observations'] for item in history], list(range(10)))
+            self.assertTrue(all(item[1]['actual'] == int(record['session_id']) for item in history))
+            OnlineRecalibrator.from_state(record['state'])
+        rows = [row for row in result.rows if row.model == 'bias__online']
+        self.assertEqual(len(rows), 20)
+        self.assertTrue(all(row.oracle_upper_bound is not None for row in rows))
 
 
 if __name__ == '__main__':

@@ -1035,6 +1035,7 @@ def evaluate_cmd(args):
         compute_intervals=not args.no_intervals, runs=args.runs, lstm_epochs=args.epochs,
         lstm_representation=args.lstm_representation,
         recalibrators=tuple(args.recalibrators), calibration_window=args.calibration_window,
+        online_recalibration=args.online_recalibration, online_iterations=args.online_iterations,
         device=args.device, initial_bankroll=args.bankroll, unit_stake=args.unit_stake,
         models=tuple(args.models) + (('dqn',) if args.model and 'dqn' not in args.models else ()),
         block_length=args.block_length,
@@ -1292,6 +1293,8 @@ Ejemplos:
     evaluate_parser.add_argument('--lstm-representation', choices=['one_hot', 'ordinal'], default='one_hot')
     evaluate_parser.add_argument('--recalibrators', nargs='*', choices=['temperature', 'mcllo', 'normalized_isotonic'], default=[])
     evaluate_parser.add_argument('--calibration-window', type=int, default=100)
+    evaluate_parser.add_argument('--online-recalibration', action='store_true', help='Apply experimental online recalibration to engine forecasts')
+    evaluate_parser.add_argument('--online-iterations', type=int, default=100)
     evaluate_parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
     evaluate_parser.add_argument('--bankroll', type=float, default=1000.0)
     evaluate_parser.add_argument('--unit-stake', type=float, default=1.0)

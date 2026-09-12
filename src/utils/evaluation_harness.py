@@ -63,6 +63,8 @@ class EvaluationConfig:
     recalibrators: Tuple[str, ...] = ()
     calibration_window: int = 100
     calibrator_regularization: float = 1e-3
+    online_recalibration: bool = False
+    online_iterations: int = 100
 
     def __post_init__(self):
         if self.training_window < 1 or self.testing_window < 1 or self.step_size < self.testing_window:
@@ -90,10 +92,13 @@ class EvaluationConfig:
             raise ValueError('Recalibration requires at least 20 calibration observations and 20 preceding training observations')
         if not isfinite(self.calibrator_regularization) or self.calibrator_regularization < 0:
             raise ValueError('Calibrator regularization must be finite and nonnegative')
+        if isinstance(self.online_iterations, bool) or not isinstance(self.online_iterations, int) or self.online_iterations < 1:
+            raise ValueError('Online iteration limit must be a positive integer')
 
 
 def _model_order(config):
-    return MODEL_ORDER + [f'{model}__{method}' for model in ('lstm', 'extra_trees', 'bias', 'consensus') for method in config.recalibrators]
+    methods = config.recalibrators + (('online',) if config.online_recalibration else ())
+    return MODEL_ORDER + [f'{model}__{method}' for model in ('lstm', 'extra_trees', 'bias', 'consensus') for method in methods]
 
 
 @dataclass
@@ -117,6 +122,7 @@ class PredictionEvaluationRow:
     action: Optional[int] = None
     expected_profit: Optional[float] = None
     lower_expected_profit: Optional[float] = None
+    oracle_upper_bound: Optional[float] = None
 
 
 @dataclass
@@ -214,7 +220,7 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
     sessions = as_sessions(numbers)
     manifest = {'schema_version': 3, 'dataset': dataset_manifest(sessions),
                 'config': asdict(config), 'seeds': [config.seed + run for run in range(config.runs)],
-                'python': platform.python_version(), 'packages': {}, 'partitions': [], 'calibration_fits': [],
+                'python': platform.python_version(), 'packages': {}, 'partitions': [], 'calibration_fits': [], 'online_recalibration': [],
                 'log_loss_probability_floor': EPSILON,
                 'interval_assumptions': 'Conditional on this dataset; approximately stationary circular temporal blocks within sessions, shared across resampled training seeds. Not evidence of future profit.'}
     manifest['calibration_inference'] = {
@@ -252,6 +258,7 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
             warnings.append(f'Session {session.session_id}: need {required} observations, received {len(session.numbers)}.')
             continue
         balances = {(run, model): config.initial_bankroll for run in range(config.runs) for model in _model_order(config)}
+        online_models = {run: {} for run in range(config.runs)}
         monitors = {}
         consumed = {}
         if config.include_baselines:
@@ -294,7 +301,19 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
                     actual = session.numbers[index]
                     emitted = _engine_rows(engine, fold, index, actual, config)
                     calibrated_rows = []
+                    pending_online = []
                     for row in emitted:
+                        if config.online_recalibration:
+                            from src.utils.online_recalibration import OnlineRecalibrator
+                            if row.model not in online_models[run]:
+                                online_models[run][row.model] = OnlineRecalibrator(max_iterations=config.online_iterations)
+                            online = online_models[run][row.model]
+                            decision = online.forecast([row.number_probs[number] for number in range(37)], event_id=session.spin_ids[index])
+                            calibrated = _row_from_probs(fold, index, f'{row.model}__online', actual,
+                                                         dict(enumerate(decision['probabilities'])), config)
+                            calibrated.oracle_upper_bound = decision['oracle_upper_bound']
+                            calibrated_rows.append(calibrated)
+                            pending_online.append(online)
                         for method in config.recalibrators:
                             calibrator = calibrators.get((row.model, method))
                             if calibrator is not None:
@@ -333,12 +352,18 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
                         balances[key] = settlement.balance_after
                         rows.append(row)
                     engine.add_number(actual)
+                    for online in pending_online:
+                        online.update(actual, event_id=session.spin_ids[index])
                     if config.include_baselines:
                         monitors[run].update(actual, event_id=session.spin_ids[index])
                         consumed[run] = index + 1
                 statuses.append({'fold': fold, 'run_id': run, 'session_id': session.session_id, **engine.get_status()})
             evaluated += config.testing_window * config.runs
             fold += 1
+        for run, models in online_models.items():
+            for model, online in models.items():
+                manifest['online_recalibration'].append({'session_id': session.session_id, 'run_id': run,
+                    'model': model, 'report': online.snapshot(), 'state': online.to_state()})
     keys = [(row.run_id, row.session_id, row.spin_id, row.model) for row in rows]
     if len(keys) != len(set(keys)):
         raise ValueError('An observation was evaluated twice for the same model and run')
