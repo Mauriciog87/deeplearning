@@ -74,6 +74,8 @@ Baseline: `7f6d915`. Scope: implement the recommendations from the paper audit, 
 `C:/Python312/python.exe -B -m unittest test_joint_calibration test_calibration_contract test_evaluation_harness test_cli_integrity -v`: 34 tests passed.
 
 ## Calibration-bound derivation
+- Stage 4a: made categorical one-hot LSTM inputs the default, retained ordinal inputs as an explicit engine/evaluation/CLI ablation, and versioned the checkpoint input contract. Existing scalar checkpoints remain ordinal. CPU loading now respects the selected CPU device. `C:/Python312/python.exe -B -m unittest test_lstm_representation test_prediction_contract test_cli_integrity -v`: 16 tests passed, including exact continuation for both representations and legacy scalar loading. Recalibration comparators and their chronological partitions remain pending.
+
 
 This is an alternative construction, not a reproduction of the population l2-ECE interval. The source concentration inequality is [Pinelis, Theorem 3.5](https://arxiv.org/abs/1208.2200v2). It bounds the maximum norm of a Hilbert-space martingale with increments of norm at most `L` through horizon `H` by `2 exp(-r^2 / (2 H L^2))`. The current arXiv text includes the paper's corrections; this construction uses the bounded-increment theorem, not its Bernstein variants.
 

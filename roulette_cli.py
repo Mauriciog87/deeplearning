@@ -1033,6 +1033,7 @@ def evaluate_cmd(args):
         ece_bins=args.ece_bins, bootstrap_resamples=args.bootstrap_resamples,
         confidence_level=args.confidence_level, comparison_baseline=args.comparison_baseline,
         compute_intervals=not args.no_intervals, runs=args.runs, lstm_epochs=args.epochs,
+        lstm_representation=args.lstm_representation,
         device=args.device, initial_bankroll=args.bankroll, unit_stake=args.unit_stake,
         models=tuple(args.models) + (('dqn',) if args.model and 'dqn' not in args.models else ()),
         block_length=args.block_length,
@@ -1287,6 +1288,7 @@ Ejemplos:
     evaluate_parser.add_argument('--comparison-baseline', default='fair', help='Baseline para comparacion pareada')
     evaluate_parser.add_argument('--runs', type=int, default=5)
     evaluate_parser.add_argument('--epochs', type=int, default=30)
+    evaluate_parser.add_argument('--lstm-representation', choices=['one_hot', 'ordinal'], default='one_hot')
     evaluate_parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
     evaluate_parser.add_argument('--bankroll', type=float, default=1000.0)
     evaluate_parser.add_argument('--unit-stake', type=float, default=1.0)

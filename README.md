@@ -94,6 +94,8 @@ The harness reports Top-1/3/5/10, log loss, multiclass Brier score, confidence E
 
 Two full-information policies compare all 47 actions through the shared settlement rules. `expected_value` maximizes expected net profit from smoothed history frequencies; `expected_value_cs` maximizes a lower expected-profit bound from the session's sequential confidence region. Both choose PASS unless the selected score is positive and the stake is affordable. Policy rows report profit and exposure, without treating actions as probability forecasts. Counterfactual replay assumes actions cannot affect outcomes or which outcomes are observed.
 
+LSTM inputs use a 37-category one-hot representation by default. `evaluate --lstm-representation ordinal` retains the previous scalar `number/36` representation as an explicit ablation. Checkpoints record the representation; existing version-2 scalar checkpoints load as ordinal models. CPU loading preserves an explicitly selected CPU device. Exact train/save/resume continuation is tested for both representations; representation choice alone does not establish better predictions.
+
 With five straight bets, a hit earns +31 units net and a miss loses 5. An unaffordable betting projection becomes PASS. Capital carries across folds within each model/run/session. ROI divides total net profit by total money staked. PASS has zero profit and no defined ROI. Policy-only rows have no forecast scores.
 
 DQN evaluation requires a versioned checkpoint with training provenance. A real-data checkpoint is excluded from any fold that overlaps its training observations or cannot be matched to its dataset. Its action and stake are evaluated separately from probability forecasts. Paired profit per observation allows comparison with PASS.

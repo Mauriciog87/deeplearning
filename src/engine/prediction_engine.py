@@ -79,10 +79,14 @@ class PredictorStats:
 class PredictionEngine:
     RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
     
-    def __init__(self, model_path: Optional[str] = None, *, device: str = 'auto', seed: int = 42):
+    def __init__(self, model_path: Optional[str] = None, *, device: str = 'auto', seed: int = 42,
+                 lstm_representation: str = 'one_hot'):
+        if lstm_representation not in ('one_hot', 'ordinal'):
+            raise ValueError('LSTM representation must be one_hot or ordinal')
         self.model_path = model_path
         self.device = device
         self.seed = seed
+        self.lstm_representation = lstm_representation
         self.lstm_predictor = None
         self.policy_agent = None
         self.policy_metadata = {}
@@ -366,7 +370,7 @@ class PredictionEngine:
                     from src.utils.lstm_predictor import LSTMPredictor
                     from src.checkpoints import seed_everything
                     seed_everything(self.seed, self.device)
-                    model = LSTMPredictor(device=self.device)
+                    model = LSTMPredictor(device=self.device, representation=self.lstm_representation)
                     result = model.fit(history, epochs=epochs, cancel_event=cancel_event)
                     fitted = model.is_trained
                 else:

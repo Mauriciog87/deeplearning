@@ -58,6 +58,7 @@ class EvaluationConfig:
     device: str = 'auto'
     models: Tuple[str, ...] = ('lstm', 'extra_trees', 'bias')
     block_length: Optional[int] = None
+    lstm_representation: str = 'one_hot'
 
     def __post_init__(self):
         if self.training_window < 1 or self.testing_window < 1 or self.step_size < self.testing_window:
@@ -76,6 +77,8 @@ class EvaluationConfig:
             raise ValueError('Device must be auto, cpu or cuda')
         if set(self.models) - {'lstm', 'extra_trees', 'bias', 'dqn'}:
             raise ValueError('Unknown model requested')
+        if self.lstm_representation not in ('one_hot', 'ordinal'):
+            raise ValueError('LSTM representation must be one_hot or ordinal')
 
 
 @dataclass
@@ -250,7 +253,8 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
             for run in range(config.runs):
                 if cancel_event is not None and cancel_event.is_set():
                     raise RuntimeError('Evaluation cancelled')
-                engine = PredictionEngine(model_path=config.model_path, device=config.device, seed=config.seed + run)
+                engine = PredictionEngine(model_path=config.model_path, device=config.device, seed=config.seed + run,
+                                          lstm_representation=config.lstm_representation)
                 if config.include_baselines:
                     for previous in range(consumed[run], test_start):
                         monitors[run].update(session.numbers[previous], event_id=session.spin_ids[previous])
