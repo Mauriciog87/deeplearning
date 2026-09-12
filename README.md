@@ -158,6 +158,16 @@ Experimental change detectors are available in `src.utils.change_detection`. `Ca
 
 `evaluate --online-recalibration --online-iterations 100` adds an online variant for each available engine forecast. Its state continues across test folds within a session and starts separately for each session and training run. Rows record the pre-outcome oracle residual; the manifest exports the complete state and aggregate diagnostics.
 
+Run the reproducible synthetic research benchmark with:
+
+```powershell
+python roulette_cli.py research --trials 20 --observations 1000 --output research/results/core.json
+python roulette_cli.py research --trials 10 --observations 600 --recalibrators temperature mcllo normalized_isotonic --include-online --output research/results/recalibration.json
+python roulette_cli.py research --trials 5 --observations 300 --scenarios uniform dependence fixed_bias --learned-models extra_trees lstm_one_hot lstm_ordinal --device cpu --output research/results/representation.json
+```
+
+The scenarios cover uniform outcomes, fixed bias, abrupt and gradual bias, stationary dependence, overconfidence, a joint-calibration counterexample and calibration improvement. Methods share each trial's outcomes. Output includes raw trial measurements, dataset hashes, seeds, source hashes, software versions, fitted calibrators, paired score differences, profit/exposure, detection power and censored delay. Binomial Monte Carlo intervals are exact; intervals for trial means use a Student-t approximation. Alpha is per method, with no family-wise claim across method comparisons. Confidence-region coverage is checked at every observation where fixed conditional probabilities apply; projection widths are sampled at four predetermined counts. The single-prior KT comparator is the categorical Dirichlet(1/2) construction from Ryu and Wornell, implemented through the same verified likelihood engine. Synthetic oracle policies are labeled and cannot be used as evidence of a deployable prediction advantage.
+
 OCR observations retain event IDs, timestamps, confidence and pending/accepted state. History reconciliation uses sequence overlap and preserves repeated numbers when they represent separate events. Ambiguous or low-confidence observations remain pending for review; they are not silently inserted. A green background alone is not recognized as zero.
 
 Capture advances its local history only after persistence acknowledges the event. Retrying an event does not create another spin. Stop cancels waits and prevents a restart while an earlier worker is alive. Capture-region settings live in `data/capture_config.json`.

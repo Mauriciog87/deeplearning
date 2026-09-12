@@ -1096,6 +1096,31 @@ def kelly_cmd(args):
     return 0
 
 
+def research_cmd(args):
+    from pathlib import Path
+    from src.checkpoints import atomic_save
+    from src.utils.research_benchmark import ResearchConfig, run_research_benchmark, format_research_report
+    try:
+        if Path(args.output).suffix.lower() != '.json':
+            raise ValueError('El resultado del benchmark debe guardarse en un archivo .json')
+        config = ResearchConfig(seed=args.seed, trials=args.trials, observations=args.observations,
+                                reference_size=args.reference_size, calibration_size=args.calibration_size,
+                                alpha=args.alpha, scenarios=tuple(args.scenarios), recalibrators=tuple(args.recalibrators),
+                                learned_models=tuple(args.learned_models), include_online=args.include_online,
+                                online_iterations=args.online_iterations, neural_epochs=args.neural_epochs,
+                                device=args.device)
+        def progress(scenario, completed, total):
+            print(f'{scenario}: {completed}/{total}', flush=True)
+        result = run_research_benchmark(config, progress=progress)
+        atomic_save(args.output, result, neural=False)
+        print(format_research_report(result))
+        print(f'Resultados: {args.output}')
+        return 0
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f'No se pudo completar el benchmark: {error}')
+        return 1
+
+
 def statistics_cmd(args):
     from src.database import RouletteRepository
     from src.utils.statistics import summary_statistics, filter_profitable_numbers
@@ -1311,6 +1336,23 @@ Ejemplos:
     
     statistics_parser = subparsers.add_parser('statistics', help='Estadísticas avanzadas (papers)')
     statistics_parser.add_argument('--session', '-s', type=int, help='ID de sesión')
+
+    research_parser = subparsers.add_parser('research', help='Benchmark sintetico reproducible de las recomendaciones de investigacion')
+    research_parser.add_argument('--seed', type=int, default=42)
+    research_parser.add_argument('--trials', type=int, default=20)
+    research_parser.add_argument('--observations', type=int, default=1000)
+    research_parser.add_argument('--reference-size', type=int, default=300)
+    research_parser.add_argument('--calibration-size', type=int, default=300)
+    research_parser.add_argument('--alpha', type=float, default=.05)
+    research_parser.add_argument('--scenarios', nargs='+', choices=['uniform', 'fixed_bias', 'abrupt_bias', 'gradual_bias', 'dependence', 'overconfidence', 'joint_counterexample', 'calibration_improvement'],
+                                 default=['uniform', 'fixed_bias', 'abrupt_bias', 'gradual_bias', 'dependence', 'overconfidence', 'joint_counterexample', 'calibration_improvement'])
+    research_parser.add_argument('--recalibrators', nargs='*', choices=['temperature', 'mcllo', 'normalized_isotonic'], default=[])
+    research_parser.add_argument('--learned-models', nargs='*', choices=['extra_trees', 'lstm_one_hot', 'lstm_ordinal'], default=[])
+    research_parser.add_argument('--include-online', action='store_true')
+    research_parser.add_argument('--online-iterations', type=int, default=30)
+    research_parser.add_argument('--neural-epochs', type=int, default=3)
+    research_parser.add_argument('--device', choices=['cpu', 'cuda', 'auto'], default='cpu')
+    research_parser.add_argument('--output', required=True, help='JSON con resultados por ensayo, incertidumbre y procedencia')
     
     args = parser.parse_args()
     
@@ -1364,6 +1406,8 @@ Ejemplos:
         return kelly_cmd(args)
     elif args.command == 'statistics':
         return statistics_cmd(args)
+    elif args.command == 'research':
+        return research_cmd(args)
     else:
         parser.print_help()
         return 1

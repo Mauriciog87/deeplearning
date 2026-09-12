@@ -85,9 +85,11 @@ Stage 4b verification: `C:/Python312/python.exe -B -m unittest test_recalibratio
 
 `C:/Python312/python.exe -B -m unittest test_online_recalibration -v`: 4 tests passed, including gradients with a positive regret component.
 
-## Calibration-bound derivation
 - Stage 6b: exposed online recalibration through evaluation and CLI options. State persists across folds and is isolated by session/run; each forecast row stores its pre-outcome oracle bound. The manifest includes final diagnostics and replayable state. `C:/Python312/python.exe -B -m unittest test_online_recalibration test_cli_integrity -v`: 13 tests passed.
 
+- Stage 7a: implemented the research CLI and eight reproducible scenario generators. Trial output retains exact configuration, seeds, data/source hashes, raw measurements, uncertainty, method assumptions, calibration/fit partitions and optimizer reports. The benchmark compares full-information policies, forecast/calibration metrics, all detectors and optional learned/online models on shared outcomes. KT is the single Dirichlet(1/2) categorical construction in Ryu and Wornell Section 3.1, using the existing verified multinomial engine. `C:/Python312/python.exe -B -m unittest test_research_benchmark -v`: 5 tests passed. Full campaigns and completion audit remain pending.
+
+## Calibration-bound derivation
 
 
 This is an alternative construction, not a reproduction of the population l2-ECE interval. The source concentration inequality is [Pinelis, Theorem 3.5](https://arxiv.org/abs/1208.2200v2). It bounds the maximum norm of a Hilbert-space martingale with increments of norm at most `L` through horizon `H` by `2 exp(-r^2 / (2 H L^2))`. The current arXiv text includes the paper's corrections; this construction uses the bounded-increment theorem, not its Bernstein variants.
