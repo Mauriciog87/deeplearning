@@ -1125,7 +1125,8 @@ def statistics_cmd(args):
     print(f"Estadístico: {chi['statistic']:.3f}")
     print(f"P-value: {chi['p_value']:.6f}")
     print(f"Significancia: {chi['significance']}")
-    print(f"¿Sesgada?: {'Sí' if chi['is_biased'] else 'No'}")
+    print(f"¿Rechaza uniformidad?: {'Sí' if chi['is_biased'] else 'No'}")
+    print('Diagnóstico de muestra fija: no rechazar no demuestra que la rueda sea uniforme.')
     print()
     
     print("─" * 60)
@@ -1144,7 +1145,8 @@ def statistics_cmd(args):
     print("─" * 60)
     for p in profitable[:10]:
         sig = "✅" if p.passes_threshold else "⚠️"
-        print(f"  {sig} #{p.number:2d}: {p.observed_probability*100:.2f}% (ventaja: {p.advantage:+.2f}%)")
+        print(f"  {sig} #{p.number:2d}: {p.observed_probability*100:.2f}% (diferencia con 1/37: {p.advantage:+.2f} puntos porcentuales)")
+    print('La marca positiva exige una cota inferior simultánea mayor que 1/36 bajo IID; no garantiza rentabilidad futura.')
     
     print("=" * 60)
     

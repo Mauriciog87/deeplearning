@@ -5,9 +5,11 @@ import numpy as np
 from collections import Counter
 from scipy import stats as scipy_stats
 from .randomization import uniformity_test
+from src.settlement import validate_number
 
 
 FAIR_PROBABILITY = 1 / 37  # 2.7027%
+BREAK_EVEN_PROBABILITY = 1 / 36
 PROBABILITY_THRESHOLD = 0.03  # 3% filter from Salirrosas paper
 CHI_SQUARE_DF = 36  # Degrees of freedom for European roulette
 
@@ -44,6 +46,10 @@ class ProbabilityEstimate:
     confidence_interval_99: Tuple[float, float]
     passes_threshold: bool
     z_score: float
+    confidence_interval: Tuple[float, float] = (0.0, 1.0)
+    confidence_level: float = .95
+    family_size: int = 37
+    inference: str = 'Fixed-sample exact binomial intervals with Bonferroni allocation; IID outcomes required, not valid for unrestricted repeated looks'
     
     @property
     def advantage(self) -> float:
@@ -57,6 +63,11 @@ class OrnsteinUhlenbeckParams:
     sigma: float  # Volatility
     current_probability: float
     expected_next: float
+    iid_overlap_lag1: float = 0.0
+    iid_overlap_theta: float = 0.0
+    raw_indicator_lag1: Optional[float] = None
+    rolling_frequency_lag1: Optional[float] = None
+    interpretation: str = 'Descriptive regression of overlapping window frequencies. expected_next concerns the next window frequency, not the next spin probability. Overlap alone creates apparent mean reversion under IID outcomes.'
 
 
 def chi_square_formal_test(
@@ -114,17 +125,19 @@ def chi_square_formal_test(
 def compute_probability_with_confidence(
     numbers: List[int],
     target_number: int,
-    confidence_level: float = 0.95
+    confidence_level: float = 0.95,
+    *, family_size: int = 37
 ) -> ProbabilityEstimate:
     """
-    Compute probability estimate with Wilson score confidence intervals.
-    
-    Wilson score intervals are preferred over normal approximation for proportions
-    as they work better near 0 and 1, which is important for roulette (p ~ 0.027).
+    Compute exact simultaneous fixed-sample intervals and descriptive Wilson intervals.
     """
     n = len(numbers)
     if n == 0:
         raise ValueError("Need at least one observation")
+    target_number = validate_number(target_number)
+    numbers = [validate_number(number) for number in numbers]
+    if not 0 < confidence_level < 1 or isinstance(family_size, bool) or not isinstance(family_size, int) or family_size < 1:
+        raise ValueError('Invalid confidence level or family size')
     
     successes = sum(1 for x in numbers if x == target_number)
     p_hat = successes / n
@@ -137,7 +150,9 @@ def compute_probability_with_confidence(
     
     z_score = (p_hat - FAIR_PROBABILITY) / np.sqrt(FAIR_PROBABILITY * (1 - FAIR_PROBABILITY) / n)
     
-    passes = p_hat >= PROBABILITY_THRESHOLD and ci_95[0] > FAIR_PROBABILITY
+    interval = scipy_stats.binomtest(successes, n).proportion_ci(
+        confidence_level=1 - (1 - confidence_level) / family_size, method='exact')
+    passes = p_hat >= PROBABILITY_THRESHOLD and interval.low > BREAK_EVEN_PROBABILITY
     
     return ProbabilityEstimate(
         number=target_number,
@@ -145,7 +160,10 @@ def compute_probability_with_confidence(
         confidence_interval_95=ci_95,
         confidence_interval_99=ci_99,
         passes_threshold=passes,
-        z_score=z_score
+        z_score=z_score,
+        confidence_interval=(interval.low, interval.high),
+        confidence_level=confidence_level,
+        family_size=family_size
     )
 
 
@@ -169,55 +187,27 @@ def estimate_ornstein_uhlenbeck_params(
     window_size: int = 100
 ) -> OrnsteinUhlenbeckParams:
     """
-    Fit Ornstein-Uhlenbeck process parameters to probability time series.
-    
-    The O-U process models probability as:
-    dP = θ(μ - P)dt + σdW
-    
-    Where:
-    - θ: mean reversion speed (how fast probability returns to fair value)
-    - μ: long-term mean (should be ~1/37 for fair wheel)
-    - σ: volatility of the process
-    - W: Wiener process (Brownian motion)
-    
-    From Salirrosas (2016), this models how observed probabilities
-    fluctuate around the theoretical value.
+    Fit a descriptive linear drift regression to overlapping window frequencies.
+    The IID overlap null has lag-one correlation (window_size-1)/window_size
+    and regression coefficient theta=1/window_size. Neither is predictive evidence.
     """
+    target_number = validate_number(target_number)
+    if isinstance(window_size, bool) or not isinstance(window_size, int) or window_size < 2:
+        raise ValueError('Window size must be an integer of at least two')
     if len(numbers) < window_size * 2:
         raise ValueError(f"Need at least {window_size * 2} observations")
     
-    probabilities = []
-    for i in range(window_size, len(numbers) + 1):
-        window = numbers[i - window_size:i]
-        p = sum(1 for x in window if x == target_number) / window_size
-        probabilities.append(p)
-    
-    P = np.array(probabilities)
-    
-    if len(P) < 2:
-        return OrnsteinUhlenbeckParams(
-            theta=0.1,
-            mu=FAIR_PROBABILITY,
-            sigma=0.01,
-            current_probability=P[-1] if len(P) > 0 else FAIR_PROBABILITY,
-            expected_next=FAIR_PROBABILITY
-        )
+    indicators = np.asarray([validate_number(number) == target_number for number in numbers], dtype=float)
+    cumulative = np.concatenate(([0], np.cumsum(indicators)))
+    P = (cumulative[window_size:] - cumulative[:-window_size]) / window_size
     
     dP = np.diff(P)
     P_lag = P[:-1]
     
     mu = np.mean(P)
     
-    try:
-        cov_matrix = np.cov(dP, P_lag - mu)
-        if cov_matrix.shape == (2, 2):
-            theta = -cov_matrix[0, 1] / cov_matrix[1, 1] if cov_matrix[1, 1] != 0 else 0.1
-        else:
-            theta = 0.1
-    except Exception:
-        theta = 0.1
-    
-    theta = max(0.01, min(theta, 2.0))
+    variance = np.var(P_lag)
+    theta = -float(np.mean((dP - dP.mean()) * (P_lag - P_lag.mean()))) / variance if variance > 0 else 0.0
     
     residuals = dP + theta * (P_lag - mu)
     sigma = np.std(residuals) if len(residuals) > 0 else 0.01
@@ -230,7 +220,13 @@ def estimate_ornstein_uhlenbeck_params(
         mu=mu,
         sigma=sigma,
         current_probability=current_p,
-        expected_next=expected_next
+        expected_next=expected_next,
+        iid_overlap_lag1=(window_size - 1) / window_size,
+        iid_overlap_theta=1 / window_size,
+        raw_indicator_lag1=float(np.corrcoef(indicators[:-1], indicators[1:])[0, 1])
+        if np.var(indicators[:-1]) > 0 and np.var(indicators[1:]) > 0 else None,
+        rolling_frequency_lag1=float(np.corrcoef(P[:-1], P[1:])[0, 1])
+        if np.var(P[:-1]) > 0 and np.var(P[1:]) > 0 else None
     )
 
 
@@ -240,29 +236,20 @@ def filter_profitable_numbers(
     require_statistical_significance: bool = True
 ) -> List[ProbabilityEstimate]:
     """
-    Apply 3% probability filter from Salirrosas (2016).
-    
-    Returns numbers where:
-    1. Observed probability >= 3% (vs 2.7% fair)
-    2. Lower bound of 95% CI > fair probability (if require_statistical_significance)
-    
-    This filter is the key insight from the paper - only bet on numbers
-    that show statistically significant positive bias.
+    Apply an observed-frequency filter, optionally requiring a simultaneous
+    fixed-sample lower bound above the straight-bet break-even probability.
     """
+    if not np.isfinite(min_probability) or not 0 <= min_probability <= 1:
+        raise ValueError('Minimum probability must lie within [0,1]')
+    if not numbers:
+        return []
     profitable = []
     
     for num in range(37):
-        try:
-            estimate = compute_probability_with_confidence(numbers, num)
-            
-            if estimate.observed_probability >= min_probability:
-                if require_statistical_significance:
-                    if estimate.confidence_interval_95[0] > FAIR_PROBABILITY:
-                        profitable.append(estimate)
-                else:
-                    profitable.append(estimate)
-        except ValueError:
-            continue
+        estimate = compute_probability_with_confidence(numbers, num)
+        if estimate.observed_probability >= min_probability:
+            if not require_statistical_significance or estimate.confidence_interval[0] > BREAK_EVEN_PROBABILITY:
+                profitable.append(estimate)
     
     profitable.sort(key=lambda x: x.observed_probability, reverse=True)
     
@@ -384,7 +371,9 @@ def probability_time_series(
         "ci_lower": ci_lower,
         "ci_upper": ci_upper,
         "fair_probability": FAIR_PROBABILITY,
-        "threshold": PROBABILITY_THRESHOLD
+        "threshold": PROBABILITY_THRESHOLD,
+        "break_even_probability": BREAK_EVEN_PROBABILITY,
+        "interpretation": "Expanding-prefix frequencies with pointwise Wilson intervals; descriptive across repeated looks"
     }
 
 
@@ -397,7 +386,7 @@ def summary_statistics(numbers: List[int]) -> Dict[str, Any]:
     
     chi_sq = chi_square_formal_test(numbers)
     entropy = compute_entropy(numbers)
-    profitable = filter_profitable_numbers(numbers, require_statistical_significance=False)
+    profitable = filter_profitable_numbers(numbers)
     
     counter = Counter(numbers)
     most_frequent = counter.most_common(5)

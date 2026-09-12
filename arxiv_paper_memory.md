@@ -33,11 +33,13 @@ Decision: implement_now.
 
 Lectura tecnica: el paper trata una rueda sesgada como una estrategia cuantitativa: recolecta 10,980 spins reales, estima desviaciones de probabilidad, usa backtesting y walk-forward optimization, y compara staking plano contra Kelly. La idea central no es "predecir" un spin aislado, sino explotar desviaciones persistentes bajo una disciplina de evaluacion temporal.
 
-Supuestos: las probabilidades no son exactamente estacionarias; el paper menciona comportamiento tipo Ornstein-Uhlenbeck, por lo que el sesgo puede revertir. Esto encaja con ruleta 0-36 solo si los datos vienen de la misma mesa/condicion y se evita mezclar sesiones incompatibles.
+Revision de implementacion: la referencia a Ornstein-Uhlenbeck no demuestra que exista memoria predictiva. Una frecuencia movil de ventana W sobre indicadores IID tiene correlacion de orden uno (W-1)/W y coeficiente de regresion de deriva 1/W por el solapamiento. El helper ahora muestra ese nulo y aclara que extrapola la frecuencia de la proxima ventana, no la probabilidad del proximo giro. Las sesiones conservan su identidad.
 
 Aplicacion ahora: mantener walk-forward, heatmaps rolling, drift entre sesiones, ROI y drawdown. No usar Kelly como default porque el propio paper muestra que flat betting puede ser mas robusto en corto plazo.
 
 Descartar por ahora: apuestas agresivas basadas en maxima probabilidad puntual sin intervalos.
+
+Decision implementada: se comparan las 47 acciones con liquidacion comun y PASS. Una apuesta a pleno necesita p>1/36 para tener ganancia esperada positiva; p>1/37 solo supera la referencia uniforme. Los filtros heredados usan intervalos binomiales exactos con ajuste Bonferroni para 37 numeros en una muestra fija IID. El monitor secuencial usa proyecciones de una region conjunta bajo probabilidades condicionales constantes. Ninguna de estas condiciones prueba que una ventaja persista.
 
 ## `1204.6412` - Predicting the outcome of roulette
 

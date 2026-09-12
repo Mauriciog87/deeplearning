@@ -7,6 +7,8 @@ from typing import Dict, List, Optional, Tuple
 from src.engine.prediction_engine import FullPrediction, PredictionEngine, PredictorType
 from src.probabilities import FAIR_PROBABILITY, validate_probabilities, Availability
 from src.settlement import settle_bet, settle_action
+from src.expected_value import choose_expected_value_action
+from src.utils.sequential_inference import MonitoringBudget, MultinomialMonitor
 from src.datasets import as_sessions, dataset_manifest
 from src.utils.temporal_statistics import adaptive_bins, calibration_error, block_bootstrap_indices
 from src.utils.calibration import CalibrationBound, fixed_bin_calibration_bound
@@ -28,6 +30,8 @@ MODEL_ORDER = [
     "hot",
     "random",
     "pass",
+    "expected_value",
+    "expected_value_cs",
 ]
 
 
@@ -92,6 +96,8 @@ class PredictionEvaluationRow:
     balance_after: Optional[float] = None
     kind: str = 'forecast'
     action: Optional[int] = None
+    expected_profit: Optional[float] = None
+    lower_expected_profit: Optional[float] = None
 
 
 @dataclass
@@ -201,6 +207,13 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
         'coverage': 'Simultaneous over time, the declared model family, and confidence/classwise/top-set summaries; conditional on the configured training runs. No guarantee across data-selected configurations.',
         'interpretation': 'Conservative bounds for predictable fixed-bin residuals, not population l2-ECE intervals or proof of joint calibration. Adaptive ECE remains descriptive.',
     }
+    manifest['decision_inference'] = {
+        'expected_value': 'Choose among all 47 actions from smoothed history frequencies, including PASS; no uncertainty guarantee',
+        'expected_value_cs': 'Maximize the lower expected profit using simultaneous multinomial confidence-region projections',
+        'confidence_alpha': 1 - config.confidence_level,
+        'allocation': 'Fixed session family with summable restart allocation; identical seed copies share one statistical allocation',
+        'assumptions': 'Actions do not affect outcomes or their observation. Confidence bounds require a fixed conditional probability vector within each session. Estimates use only preceding outcomes.',
+    }
     for package in ('numpy', 'scipy', 'scikit-learn', 'torch', 'gymnasium'):
         try:
             manifest['packages'][package] = version(package)
@@ -215,6 +228,12 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
             warnings.append(f'Session {session.session_id}: need {required} observations, received {len(session.numbers)}.')
             continue
         balances = {(run, model): config.initial_bankroll for run in range(config.runs) for model in MODEL_ORDER}
+        monitors = {}
+        consumed = {}
+        if config.include_baselines:
+            budget = MonitoringBudget(1 - config.confidence_level, tuple(item.session_id for item in sessions))
+            monitors = {run: MultinomialMonitor(session.session_id, alpha=budget.allocation(session.session_id)) for run in range(config.runs)}
+            consumed = {run: 0 for run in range(config.runs)}
         for start in range(0, len(session.numbers) - required + 1, config.step_size):
             test_start = start + config.training_window
             test_end = test_start + config.testing_window
@@ -226,6 +245,10 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
                 if cancel_event is not None and cancel_event.is_set():
                     raise RuntimeError('Evaluation cancelled')
                 engine = PredictionEngine(model_path=config.model_path, device=config.device, seed=config.seed + run)
+                if config.include_baselines:
+                    for previous in range(consumed[run], test_start):
+                        monitors[run].update(session.numbers[previous], event_id=session.spin_ids[previous])
+                    consumed[run] = test_start
                 engine.load_history(train_data, session_id=session.session_id)
                 requested_fit = tuple(model for model in config.models if model in ('lstm', 'extra_trees'))
                 if requested_fit:
@@ -251,6 +274,13 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
                         emitted.extend(_baseline_rows(engine.history, fold, index, actual, config, rng))
                         emitted.append(PredictionEvaluationRow(fold, index, 'pass', actual, None, None, {}, [], 0,
                                                               kind='policy', action=46))
+                        probabilities = _rolling_frequency_probs(engine.history)
+                        for model, bounds in (('expected_value', None), ('expected_value_cs', monitors[run].probability_bounds)):
+                            decision = choose_expected_value_action(probabilities, balances[(run, model)], config.unit_stake,
+                                                                    probability_bounds=bounds)
+                            emitted.append(PredictionEvaluationRow(
+                                fold, index, model, actual, None, None, {}, [], 0, kind='policy', action=decision.action,
+                                expected_profit=decision.expected_profit, lower_expected_profit=decision.lower_expected_profit))
                     for row in emitted:
                         row.session_id, row.spin_id, row.run_id = session.session_id, session.spin_ids[index], run
                         key = (run, row.model)
@@ -265,6 +295,9 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
                         balances[key] = settlement.balance_after
                         rows.append(row)
                     engine.add_number(actual)
+                    if config.include_baselines:
+                        monitors[run].update(actual, event_id=session.spin_ids[index])
+                        consumed[run] = index + 1
                 statuses.append({'fold': fold, 'run_id': run, 'session_id': session.session_id, **engine.get_status()})
             evaluated += config.testing_window * config.runs
             fold += 1

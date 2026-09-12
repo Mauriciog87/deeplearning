@@ -821,27 +821,16 @@ def compute_probability_with_ci(
     confidence: float = 0.95
 ) -> Dict:
     """
-    Compute probability estimate with Wilson score confidence interval.
-    
-    Wilson intervals are preferred for proportions near 0 or 1.
+    Compute exact fixed-sample intervals allocated across all 37 numbers.
     """
+    from .statistics import compute_probability_with_confidence, BREAK_EVEN_PROBABILITY
+
+    estimate = compute_probability_with_confidence(spin_data, number, confidence)
     n = len(spin_data)
     successes = sum(1 for x in spin_data if x == number)
-    p_hat = successes / n if n > 0 else 0
-    
-    z = stats.norm.ppf(1 - (1 - confidence) / 2)
-    
-    denominator = 1 + z**2 / n
-    center = p_hat + z**2 / (2 * n)
-    spread = z * np.sqrt((p_hat * (1 - p_hat) + z**2 / (4 * n)) / n)
-    
-    ci_lower = max(0, (center - spread) / denominator)
-    ci_upper = min(1, (center + spread) / denominator)
-    
+    p_hat = estimate.observed_probability
+    ci_lower, ci_upper = estimate.confidence_interval
     fair_prob = 1 / 37
-    z_score = (p_hat - fair_prob) / np.sqrt(fair_prob * (1 - fair_prob) / n) if n > 0 else 0
-    
-    passes_threshold = p_hat >= 0.03 and ci_lower > fair_prob
     
     return {
         "number": number,
@@ -850,10 +839,15 @@ def compute_probability_with_ci(
         "probability": p_hat,
         "fair_probability": fair_prob,
         "confidence_interval": (ci_lower, ci_upper),
-        "z_score": z_score,
+        "z_score": estimate.z_score,
         "advantage_pct": (p_hat - fair_prob) * 100,
-        "passes_3pct_threshold": passes_threshold,
-        "statistically_significant": ci_lower > fair_prob
+        "passes_3pct_threshold": estimate.passes_threshold,
+        "statistically_significant": ci_lower > fair_prob,
+        "lower_bound_above_break_even": ci_lower > BREAK_EVEN_PROBABILITY,
+        "break_even_probability": BREAK_EVEN_PROBABILITY,
+        "inference": estimate.inference,
+        "family_size": estimate.family_size,
+        "confidence_level": confidence
     }
 
 
@@ -882,7 +876,9 @@ def format_formal_bias_report(spin_data: List[int]) -> str:
     lines = [
         "═" * 60,
         "📊 FORMAL WHEEL BIAS ANALYSIS",
-        f"   Following Salirrosas (2016) methodology",
+        "   Fixed-sample diagnostics inspired by Salirrosas (2016)",
+        "   Pocket intervals: exact binomial, Bonferroni family of 37; IID required",
+        "   Frequency differences and non-rejection do not establish profitability or fairness",
         "═" * 60,
         "",
         f"Total Spins: {chi_sq['total_spins']}",
