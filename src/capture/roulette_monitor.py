@@ -3,7 +3,7 @@ import time
 import threading
 from pathlib import Path
 from typing import Optional, Callable, List
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from datetime import datetime
 
 try:
@@ -14,6 +14,7 @@ except ImportError:
 
 from .screen_capture import ScreenCapture, CaptureRegion, RegionSelector
 from .ocr_reader import RouletteOCR
+from .reconciliation import CaptureObservation, reconcile_history
 
 
 @dataclass
@@ -55,14 +56,23 @@ class RouletteMonitor:
     def __init__(
         self,
         on_number_detected: Optional[Callable[[int], None]] = None,
-        config_path: Optional[str] = None
+        config_path: Optional[str] = None,
+        on_observation: Optional[Callable] = None
     ):
         self.screen_capture = ScreenCapture()
         self.ocr = RouletteOCR(use_gpu=True)
         self.on_number_detected = on_number_detected
+        self.on_observation = on_observation
+        self.pending_observations = {}
+        self.accepted_events = set()
+        self.stop_event = threading.Event()
+        self.state_lock = threading.RLock()
+        self.inactivity_thread = None
+        self.last_history_confidence = 0.0
         
         self.config_path = config_path or str(Path(__file__).parent.parent.parent / "data" / "capture_config.json")
         self.config = self._load_or_create_config()
+        self.ocr.use_gpu = self.config.use_gpu
         
         self.is_running = False
         self.numbers_detected: List[int] = []
@@ -114,67 +124,100 @@ class RouletteMonitor:
         self.config.save(self.config_path)
         self._apply_config()
     
-    def _on_screen_change(self, image):
-        time.sleep(0.3)
-        
-        fresh_image = self.screen_capture.capture()
-        if fresh_image is None:
-            fresh_image = image
-        
-        result = self.ocr.read_first_number(fresh_image)
-        
-        if result:
-            number, confidence = result
-            
-            if confidence < self.config.min_confidence:
-                print(f"[RouletteMonitor] Low confidence: {number} ({confidence:.2f}) - IGNORED")
-                return
-            
-            self.numbers_detected.append(number)
+    def _record_observation(self, observation):
+        with self.state_lock:
+            if self.stop_event.is_set():
+                return False
+            self.pending_observations[observation.event_id] = observation
+            if self.on_observation:
+                self.on_observation(observation)
+            return True
+
+    def _deliver(self, observation):
+        with self.state_lock:
+            if observation.event_id in self.accepted_events:
+                return True
+            if self.stop_event.is_set():
+                return False
+            self._record_observation(observation)
+            try:
+                if not self.on_number_detected:
+                    raise RuntimeError('No persistence callback is configured')
+                acknowledged = self.on_number_detected(
+                    observation.numbers[0], event_id=observation.event_id, observed_at=observation.observed_at)
+                if not acknowledged:
+                    raise RuntimeError('Persistence was not acknowledged')
+            except Exception as error:
+                observation.reason = str(error)
+                self._record_observation(observation)
+                return False
+            number = observation.numbers[0]
             self.session_numbers.append(number)
-            self.last_detection_time = datetime.now()
+            self.numbers_detected.append(number)
+            self.last_detection_time = observation.observed_at
             self.last_activity_time = time.time()
             self.detection_count += 1
-            
-            print(f"[RouletteMonitor] Detected: {number} (confidence: {confidence:.2f})")
-            
-            if self.on_number_detected:
-                try:
-                    self.on_number_detected(number)
-                    print(f">>> Number {number} saved <<<")
-                except Exception as e:
-                    print(f"[RouletteMonitor] Callback error: {e}")
-            
-            if self.config.post_detection_pause > 0:
-                print(f"[RouletteMonitor] Pausing {self.config.post_detection_pause}s...")
-                time.sleep(self.config.post_detection_pause)
-                self.screen_capture.last_image = None
-                print("[RouletteMonitor] Resuming...")
-        else:
-            print("[RouletteMonitor] Change detected but no number found")
-    
+            self.accepted_events.add(observation.event_id)
+            observation.status = 'accepted'
+            if self.on_observation:
+                self.on_observation(observation)
+            self.pending_observations.pop(observation.event_id, None)
+            return True
+
+    def _on_screen_change(self, image):
+        if self.stop_event.wait(.3):
+            return
+        fresh_image = self.screen_capture.capture()
+        result = self.ocr.read_first_number(fresh_image if fresh_image is not None else image)
+        if self.stop_event.is_set():
+            return
+        if not result or self.stop_event.is_set():
+            return
+        number, confidence = result
+        observation = CaptureObservation([number], confidence)
+        if confidence < self.config.min_confidence:
+            observation.reason = 'OCR confidence is below the configured threshold'
+            self._record_observation(observation)
+            return
+        self._deliver(observation)
+        if self.stop_event.wait(self.config.post_detection_pause):
+            return
+        if self.has_history_region():
+            self._reconcile_numbers()
+
     def start(self):
         if self.screen_capture.region is None:
             raise ValueError("Region not configured. Call select_region() or set_region() first.")
         
+        if self.is_running or any(thread and thread.is_alive() for thread in
+                                  (self.screen_capture.monitor_thread, self.inactivity_thread)):
+            raise RuntimeError('Previous monitoring work must finish before restarting')
+        self.stop_event.clear()
         self.is_running = True
         self.last_activity_time = time.time()
         print(f"[RouletteMonitor] Starting monitoring...")
         print(f"[RouletteMonitor] Region: ({self.config.region_x}, {self.config.region_y}) {self.config.region_width}x{self.config.region_height}")
         
-        if self.has_reconnect_region() and self.auto_reconnect_enabled:
-            print(f"[RouletteMonitor] Auto-reconnect enabled (timeout: {self.config.inactivity_timeout}s)")
-            self._start_inactivity_checker()
-        
-        self.screen_capture.start_monitoring(
-            on_change=self._on_screen_change,
-            check_interval=self.config.check_interval,
-            change_threshold=self.config.change_threshold
-        )
-    
+        try:
+            self.screen_capture.start_monitoring(
+                on_change=self._on_screen_change,
+                check_interval=self.config.check_interval,
+                change_threshold=self.config.change_threshold
+            )
+            if self.has_reconnect_region() and self.auto_reconnect_enabled:
+                self._start_inactivity_checker()
+        except Exception:
+            self.is_running = False
+            self.stop_event.set()
+            raise
+
     def stop(self):
-        self.is_running = False
+        with self.state_lock:
+            self.is_running = False
+            self.stop_event.set()
         self.screen_capture.stop_monitoring()
+        if self.inactivity_thread and self.inactivity_thread is not threading.current_thread():
+            self.inactivity_thread.join(timeout=2)
         print(f"[RouletteMonitor] Stopped. Total detections: {self.detection_count}")
     
     def test_capture(self) -> Optional[int]:
@@ -250,7 +293,13 @@ class RouletteMonitor:
         return self.config.history_width > 0 and self.config.history_height > 0
     
     def set_session_numbers(self, numbers: List[int]):
-        self.session_numbers = list(numbers)
+        from src.settlement import validate_number
+        with self.state_lock:
+            if self.is_running:
+                raise RuntimeError('Stop capture before switching sessions')
+            self.session_numbers = [validate_number(number) for number in numbers]
+            self.pending_observations.clear()
+            self.accepted_events.clear()
     
     def _read_history_numbers(self) -> List[int]:
         if not self.has_history_region():
@@ -276,68 +325,41 @@ class RouletteMonitor:
             return []
         
         results = self.ocr.read_all_numbers(image)
-        numbers = [n for n, conf in results if conf >= self.config.min_confidence]
-        
-        return numbers[:self.config.reconcile_count]
+        results = results[:self.config.reconcile_count]
+        self.last_history_confidence = min((confidence for _, confidence in results), default=0.0)
+        if results and self.last_history_confidence < self.config.min_confidence:
+            self._record_observation(CaptureObservation([number for number, _ in results], self.last_history_confidence,
+                                                       'History OCR contains uncertain numbers'))
+            return []
+        return [number for number, _ in results]
     
     def _reconcile_numbers(self) -> int:
-        if not self.has_history_region() or not self.config.reconcile_after_reconnect:
+        if not self.has_history_region() or not self.config.reconcile_after_reconnect or self.stop_event.is_set():
             return 0
-        
-        print("[RouletteMonitor] Reading history for reconciliation...")
-        history_numbers = self._read_history_numbers()
-        
-        if not history_numbers:
-            print("[RouletteMonitor] No numbers found in history region")
+        observed = self._read_history_numbers()
+        if not observed or self.stop_event.is_set():
             return 0
-        
-        print(f"[RouletteMonitor] History numbers (L->R): {history_numbers}")
-        
-        last_known = self.session_numbers[-1] if self.session_numbers else None
-        print(f"[RouletteMonitor] Last known number: {last_known}")
-        
-        if last_known is None:
-            return 0
-        
-        try:
-            sync_point = history_numbers.index(last_known)
-            print(f"[RouletteMonitor] Found sync point at index {sync_point}")
-        except ValueError:
-            print(f"[RouletteMonitor] Last known number {last_known} not in history - cannot reconcile")
-            return 0
-        
-        missing_numbers = history_numbers[:sync_point]
-        
-        if not missing_numbers:
-            print("[RouletteMonitor] No new numbers to reconcile")
-            return 0
-        
-        print(f"[RouletteMonitor] Missing numbers to add: {missing_numbers}")
-        
-        reconciled = 0
-        for number in reversed(missing_numbers):
-            print(f"[RouletteMonitor] Reconciling missing number: {number}")
-            self.session_numbers.append(number)
-            self.reconciled_count += 1
-            reconciled += 1
-            
-            if self.on_number_detected:
-                try:
-                    self.on_number_detected(number)
-                    print(f">>> Reconciled number {number} saved <<<")
-                except Exception as e:
-                    print(f"[RouletteMonitor] Callback error: {e}")
-        
-        print(f"[RouletteMonitor] Reconciled {reconciled} number(s)")
-        return reconciled
-    
+        with self.state_lock:
+            missing, reason = reconcile_history(self.session_numbers, observed)
+            if missing is None:
+                self._record_observation(CaptureObservation(observed, self.last_history_confidence, reason))
+                return 0
+            reconciled = 0
+            for number in missing:
+                if not self._deliver(CaptureObservation([number], self.last_history_confidence)):
+                    break
+                reconciled += 1
+                self.reconciled_count += 1
+            return reconciled
+
     def has_reconnect_region(self) -> bool:
         return self.config.reconnect_width > 0 and self.config.reconnect_height > 0
     
     def _start_inactivity_checker(self):
         def check_loop():
             while self.is_running:
-                time.sleep(10)
+                if self.stop_event.wait(10):
+                    break
                 if not self.is_running:
                     break
                 
@@ -348,10 +370,12 @@ class RouletteMonitor:
                     self._click_reconnect()
                     self.last_activity_time = time.time()
         
-        thread = threading.Thread(target=check_loop, daemon=True)
-        thread.start()
+        self.inactivity_thread = threading.Thread(target=check_loop, daemon=True)
+        self.inactivity_thread.start()
     
     def _click_reconnect(self):
+        if self.stop_event.is_set():
+            return False
         if not PYAUTOGUI_AVAILABLE:
             print("[RouletteMonitor] pyautogui not available for auto-reconnect")
             return False
@@ -368,7 +392,8 @@ class RouletteMonitor:
             self.reconnect_count += 1
             print(f"[RouletteMonitor] Reconnect clicked at ({center_x}, {center_y}) - Total: {self.reconnect_count}")
             
-            time.sleep(3)
+            if self.stop_event.wait(3):
+                return False
             self._reconcile_numbers()
             
             return True

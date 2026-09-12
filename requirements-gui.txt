@@ -1,0 +1,3 @@
+-r requirements-ml.txt
+customtkinter==5.2.2
+Pillow==12.0.0

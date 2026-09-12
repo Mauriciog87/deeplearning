@@ -430,8 +430,8 @@ class PredictorStatsTable(ctk.CTkScrollableFrame):
     def __init__(self, master, **kwargs):
         super().__init__(master, orientation="horizontal", **kwargs)
         
-        self.headers = ["Pred", "N", "Num", "Col", "Par", "H/L", "D1", "D2", "D3", "C1", "C2", "C3"]
-        self.categories = ["number", "color", "parity", "high_low", "dozen1", "dozen2", "dozen3", "column1", "column2", "column3"]
+        self.headers = ["Pred", "N", "Num", "Color", "Parity", "H/L", "Dozen", "Column"]
+        self.categories = ["number", "color", "parity", "high_low", "dozen", "column"]
         
         for i, header in enumerate(self.headers):
             w = 55 if i == 0 else 35
@@ -521,7 +521,7 @@ class IndividualPredictionsPanel(ctk.CTkFrame):
         
         self.predictor_widgets: Dict[str, Dict] = {}
         
-        predictors = ["LSTM", "DQN", "EXTRA_TREES", "BIAS"]
+        predictors = ["LSTM", "EXTRA_TREES", "BIAS"]
         for i, name in enumerate(predictors):
             self.predictors_frame.grid_columnconfigure(i, weight=1)
             
@@ -565,7 +565,7 @@ class IndividualPredictionsPanel(ctk.CTkFrame):
         else:
             return "#FFFFFF"
     
-    def update_predictor(self, predictor_name: str, number: Optional[int], confidence: Optional[float]):
+    def update_predictor(self, predictor_name: str, number: Optional[int], confidence: Optional[float], status: str = 'N/A'):
         key = predictor_name.lower()
         if key not in self.predictor_widgets:
             return
@@ -579,7 +579,7 @@ class IndividualPredictionsPanel(ctk.CTkFrame):
             widget["frame"].configure(fg_color="gray30")
         else:
             widget["number"].configure(text="--", text_color="gray")
-            widget["confidence"].configure(text="N/A", text_color="gray")
+            widget["confidence"].configure(text=status, text_color="gray")
             widget["frame"].configure(fg_color="gray20")
     
     def clear(self):

@@ -1,0 +1,46 @@
+TimesFM future integration
+
+Context:
+TimesFM may become useful once the SQLite database has enough well-labeled spins to analyze time-dependent behavior. It should not be used directly on raw roulette numbers as an ordinal continuous series.
+
+Potential use:
+- Forecast derived time-series features such as rolling frequency per number, wheel sector heat, dozen/column/color/parity rates, entropy, and deviation from fair probability.
+- Build temporal heatmaps for hot and cold numbers, sectors, and categories across sessions.
+- Detect anomalies when observed behavior falls outside expected forecast intervals.
+- Evaluate covariates if the database later stores table, wheel, session, timestamp, dealer, direction, speed, or capture metadata.
+
+Integration constraints:
+- Keep TimesFM optional and lazy-loaded.
+- Do not add it to the core requirements until it beats existing baselines.
+- Expect HuggingFace model download and additional dependencies.
+- Convert forecasts back into normalized probabilities over numbers or categories before using them in the prediction engine.
+
+Acceptance criteria:
+- Add as an experimental predictor only after walk-forward evaluation.
+- Compare against fair, rolling_frequency, last_n, hot, random, bias, and consensus.
+- Require improvement in log-loss, Brier score, calibration, and top-k hit rate before enabling it in normal prediction flows.
+
+Reference:
+https://github.com/google-research/timesfm
+
+Google Research follow-up backlog
+
+Implemented now:
+- Evaluation harness now has bootstrap confidence intervals, calibration bins, and paired improvement comparisons against fair.
+- This covers the first practical slice from rliable, robustness_metrics, and rl-reliability-metrics without adding dependencies.
+- Heatmaps now generate CLI PNG reports for table residuals, wheel sectors, rolling number residuals, and rolling category residuals from global or session data.
+- Heatmaps now include anomaly summaries, global session drift heatmaps, and a GUI action that generates a session report and shows paths plus top alerts.
+
+Future implementation candidates:
+- Inline GUI image preview for heatmap PNGs.
+- More advanced anomaly alerts inspired by spade_anomaly_detection using entropy, chi-square residuals, and session metadata.
+- Soft-DTW-style drift over rolling windows, never raw roulette numbers as continuous values.
+- Optional TimesFM experiment over derived features once the SQLite database is large and well labeled.
+- Off-policy evaluation discipline inspired by dice_rl and deep_ope if betting policies or strategy selectors become more complex.
+- Bayesian hyperparameter optimization inspired by gpax, hyperbo, and optformer only after evaluation confidence intervals are stable.
+- Unique candidate sampling inspired by unique-randomizer only if stochastic top-k diversity becomes useful.
+
+Acceptance rules for future predictor work:
+- No model is enabled in normal prediction flows unless it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier score, calibration, and top-k hit rate.
+- ROI alone is not enough to accept a model.
+- Any threshold, feature window, or model selection rule must be fixed before evaluating the test fold.

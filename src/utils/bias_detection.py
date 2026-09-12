@@ -20,6 +20,9 @@ physical biases can still occur due to:
 
 import numpy as np
 from scipy import stats
+from .randomization import categorical_goodness_of_fit, uniformity_test
+from .multiple_testing import false_discovery_control
+from ..settlement import validate_number
 from typing import List, Dict, Tuple, Optional, Set
 from collections import Counter
 from dataclasses import dataclass
@@ -106,6 +109,7 @@ def chi_square_test(
     Returns:
         BiasResult with chi-square statistic and p-value
     """
+    spin_data = [validate_number(number) for number in spin_data]
     n = len(spin_data)
     
     # Count occurrences of each number
@@ -118,7 +122,7 @@ def chi_square_test(
     expected = np.full(categories, n / categories)
     
     # Chi-square test
-    chi2, p_value = stats.chisquare(observed, expected)
+    chi2, p_value, method = categorical_goodness_of_fit(observed, expected / expected.sum())
     
     # Find most biased numbers
     excess = (observed - expected) / expected
@@ -132,6 +136,7 @@ def chi_square_test(
         p_value=p_value,
         bias_level=bias_level,
         details={
+            "method": method,
             "observed": observed.tolist(),
             "expected": expected.tolist(),
             "excess_frequency": excess.tolist(),
@@ -161,6 +166,9 @@ def sector_bias_test(
     Returns:
         BiasResult for sector analysis
     """
+    if not 2 <= n_sectors <= 37:
+        raise ValueError('Sector count must be between 2 and 37')
+    spin_data = [validate_number(number) for number in spin_data]
     sector_size = 37 / n_sectors
     
     # Assign each spin to a sector
@@ -173,10 +181,11 @@ def sector_bias_test(
     
     # Expected counts
     n = len(spin_data)
-    expected = np.full(n_sectors, n / n_sectors)
+    pocket_counts = np.bincount([min(int(pos / sector_size), n_sectors - 1) for pos in range(37)], minlength=n_sectors)
+    expected = n * pocket_counts / 37
     
     # Chi-square test on sectors
-    chi2, p_value = stats.chisquare(sector_counts, expected)
+    chi2, p_value, method = categorical_goodness_of_fit(sector_counts, pocket_counts / 37)
     
     # Identify hot/cold sectors
     excess = (sector_counts - expected) / expected
@@ -186,11 +195,8 @@ def sector_bias_test(
     bias_level = classify_bias(p_value)
     
     # Get numbers in hot sector
-    hot_sector_numbers = []
-    start_pos = int(hot_sector * sector_size)
-    end_pos = int((hot_sector + 1) * sector_size)
-    for pos in range(start_pos, min(end_pos, 37)):
-        hot_sector_numbers.append(EUROPEAN_WHEEL_ORDER[pos])
+    hot_sector_numbers = [number for pos, number in enumerate(EUROPEAN_WHEEL_ORDER)
+                          if min(int(pos / sector_size), n_sectors - 1) == hot_sector]
     
     return BiasResult(
         test_name="Sector Bias Test",
@@ -198,6 +204,8 @@ def sector_bias_test(
         p_value=p_value,
         bias_level=bias_level,
         details={
+            "method": method,
+            "expected_counts": expected.tolist(),
             "sector_counts": sector_counts.tolist(),
             "excess_frequency": excess.tolist(),
             "hot_sector": hot_sector,
@@ -492,6 +500,12 @@ def generate_bias_report(spin_data: List[int]) -> WheelBiasReport:
     chi_result = chi_square_test(spin_data)
     sector_result = sector_bias_test(spin_data)
     runs_result = runs_test(spin_data)
+    tests = [chi_result, sector_result, runs_result]
+    adjusted, _ = false_discovery_control([result.p_value for result in tests], method='by')
+    for result, q_value in zip(tests, adjusted):
+        result.details['q_value'] = q_value
+        result.bias_level = classify_bias(q_value)
+        result.interpretation = f'Raw p = {result.p_value:.4f}; BY q = {q_value:.4f}. Descriptive evidence only.'
     
     # Find hot/cold numbers and sectors
     hot_numbers, cold_numbers = detect_hot_cold_numbers(spin_data)
@@ -515,13 +529,13 @@ def generate_bias_report(spin_data: List[int]) -> WheelBiasReport:
     # Generate recommendations
     recommendations = []
     if overall_bias in [BiasLevel.STRONG, BiasLevel.EXTREME]:
-        recommendations.append("Strong bias detected - consider betting on hot numbers/sectors")
+        recommendations.append("Distributional deviation detected; validate it on a later independent session")
         if hot_numbers:
             recommendations.append(f"Hot numbers: {[n for n, _ in hot_numbers[:5]]}")
         if hot_sectors:
             recommendations.append(f"Hot wheel sector: {hot_sectors[0][0]} ({hot_sectors[0][1]*100:.1f}% excess)")
     elif overall_bias == BiasLevel.MODERATE:
-        recommendations.append("Moderate bias detected - may be exploitable with caution")
+        recommendations.append("A distributional signal needs independent confirmation")
         recommendations.append("Recommend gathering more data to confirm")
     elif overall_bias == BiasLevel.WEAK:
         recommendations.append("Weak bias signal - insufficient for reliable exploitation")
@@ -556,7 +570,7 @@ def print_bias_report(report: WheelBiasReport):
     for result in [report.chi_square_result, report.sector_result, report.runs_result]:
         print(f"\n{result.test_name}:")
         print(f"  Statistic: {result.statistic:.4f}")
-        print(f"  P-value: {result.p_value:.6f}")
+        print(f"  P-value: {result.p_value:.6f}; BY q-value: {result.details.get('q_value', result.p_value):.6f}")
         print(f"  Bias Level: {result.bias_level.value}")
         print(f"  {result.interpretation}")
     
@@ -715,15 +729,15 @@ def formal_chi_square_test(
     critical_95 = stats.chi2.ppf(0.95, df)  # ~50.998
     critical_99 = stats.chi2.ppf(0.99, df)  # ~58.619
     critical_999 = stats.chi2.ppf(0.999, df)  # ~65.247
-    p_value = 1 - stats.chi2.cdf(chi_sq, df)
+    chi_sq, p_value, method = uniformity_test(spin_data)
     
-    if chi_sq >= critical_999:
+    if p_value <= .001:
         significance = "highly_significant"
         conclusion = "Very strong evidence of wheel bias (p < 0.001)"
-    elif chi_sq >= critical_99:
+    elif p_value <= .01:
         significance = "significant_99"
         conclusion = "Strong evidence of wheel bias (p < 0.01)"
-    elif chi_sq >= critical_95:
+    elif p_value <= .05:
         significance = "significant_95"
         conclusion = "Evidence of wheel bias (p < 0.05)"
     else:
@@ -737,6 +751,7 @@ def formal_chi_square_test(
     ]
     
     return {
+        "method": method,
         "chi_square": chi_sq,
         "p_value": p_value,
         "degrees_of_freedom": df,

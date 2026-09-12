@@ -4,9 +4,11 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any, Callable
 import numpy as np
 
-from src.utils.predictor import LSTMPredictor, RoulettePredictor, ExtraTreesPredictor, FAIR_PROBABILITY
+from src.utils.predictor import ExtraTreesPredictor
+from src.probabilities import (FAIR_PROBABILITY, Availability, ModelStatus, PolicyDecision,
+                               validate_probabilities, ranked_numbers)
+from src.settlement import validate_number
 from src.utils.bias_aware_predictor import BiasAwarePredictor
-from src.database.models import Spin
 
 
 class PredictorType(Enum):
@@ -14,6 +16,8 @@ class PredictorType(Enum):
     DQN = "dqn"
     EXTRA_TREES = "extra_trees"
     BIAS = "bias"
+    CONSENSUS = "consensus"
+    FAIR = "fair"
 
 
 @dataclass
@@ -75,30 +79,51 @@ class PredictorStats:
 class PredictionEngine:
     RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
     
-    def __init__(self, model_path: Optional[str] = None):
-        self.lstm_predictor = LSTMPredictor(sequence_length=10, force_gpu=True)
-        self.dqn_predictor = RoulettePredictor(model_path=model_path, use_extra_trees=False)
-        self.extra_trees_predictor = ExtraTreesPredictor()
+    def __init__(self, model_path: Optional[str] = None, *, device: str = 'auto', seed: int = 42):
+        self.model_path = model_path
+        self.device = device
+        self.seed = seed
+        self.lstm_predictor = None
+        self.policy_agent = None
+        self.policy_metadata = {}
+        self.extra_trees_predictor = None
         self.bias_aware_predictor = BiasAwarePredictor()
-        
-        self.history: List[int] = []
-        self.stats: Dict[PredictorType, PredictorStats] = {
-            pt: PredictorStats(predictor=pt) for pt in PredictorType
-        }
-        
+        self.history = []
+        self.stats = {pt: PredictorStats(predictor=pt) for pt in PredictorType}
+        self.statuses = {pt: ModelStatus(Availability.UNTRAINED) for pt in PredictorType}
         self.is_lstm_trained = False
         self.is_extra_trees_trained = False
-        self.training_lock = threading.Lock()
+        self.training_lock = threading.RLock()
         self.training_in_progress = False
-        self.on_training_complete: Optional[Callable] = None
-    
+        self.cancel_event = threading.Event()
+        self.data_version = 0
+        self.session_id = None
+        self.last_training_result = None
+        self._pending_predictions = None
+        self._validated_version = None
+
     def add_number(self, number: int):
-        if 0 <= number <= 36:
-            self.history.append(number)
-    
-    def load_history(self, numbers: List[int]):
-        self.history = [n for n in numbers if 0 <= n <= 36]
-    
+        with self.training_lock:
+            self.history.append(validate_number(number))
+            self.data_version += 1
+            self._pending_predictions = None
+
+    def load_history(self, numbers: List[int], session_id=None):
+        validated = [validate_number(n) for n in numbers]
+        with self.training_lock:
+            self.cancel_event.set()
+            self.history = validated
+            self.session_id = session_id
+            self.data_version += 1
+            self._pending_predictions = None
+            self._validated_version = None
+            self.stats = {pt: PredictorStats(predictor=pt) for pt in PredictorType}
+            self.lstm_predictor = None
+            self.extra_trees_predictor = None
+            self.is_lstm_trained = False
+            self.is_extra_trees_trained = False
+            self.statuses = {pt: ModelStatus(Availability.UNTRAINED) for pt in PredictorType}
+
     def get_number_color(self, number: int) -> str:
         if number == 0:
             return "green"
@@ -149,200 +174,103 @@ class PredictionEngine:
             "column": column_probs
         }
     
-    def _predict_lstm(self) -> Optional[FullPrediction]:
-        if not self.is_lstm_trained or len(self.history) < 10:
-            return None
-        
-        top_numbers = self.lstm_predictor.predict_top_n(self.history, n=10)
-        
-        number_probs = {i: FAIR_PROBABILITY for i in range(37)}
-        for num, prob in top_numbers:
-            number_probs[num] = prob
-        
-        total = sum(number_probs.values())
-        number_probs = {k: v / total for k, v in number_probs.items()}
-        
-        cat_probs = self._compute_category_probabilities(number_probs)
-        
-        best_number = top_numbers[0] if top_numbers else (0, FAIR_PROBABILITY)
-        best_color = max(cat_probs["color"].items(), key=lambda x: x[1])
-        best_parity = max([(k, v) for k, v in cat_probs["parity"].items() if k != "zero"], key=lambda x: x[1])
-        best_high_low = max([(k, v) for k, v in cat_probs["high_low"].items() if k != "zero"], key=lambda x: x[1])
-        best_dozen = max([(k, v) for k, v in cat_probs["dozen"].items() if k != 0], key=lambda x: x[1])
-        best_column = max([(k, v) for k, v in cat_probs["column"].items() if k != 0], key=lambda x: x[1])
-        
-        return FullPrediction(
-            predictor=PredictorType.LSTM,
-            number=CategoryPrediction(best_number[0], best_number[1], number_probs),
-            color=CategoryPrediction(best_color[0], best_color[1], cat_probs["color"]),
-            parity=CategoryPrediction(best_parity[0], best_parity[1], cat_probs["parity"]),
-            high_low=CategoryPrediction(best_high_low[0], best_high_low[1], cat_probs["high_low"]),
-            dozen=CategoryPrediction(best_dozen[0], best_dozen[1], cat_probs["dozen"]),
-            column=CategoryPrediction(best_column[0], best_column[1], cat_probs["column"]),
-            top_numbers=top_numbers
-        )
-    
-    def _predict_bias(self) -> Optional[FullPrediction]:
-        result = self.bias_aware_predictor.fit_predict(self.history)
+    def prediction_from_probabilities(self, predictor, probabilities):
+        vector = validate_probabilities(probabilities)
+        number_probs = {n: float(vector[n]) for n in range(37)}
+        categories = self._compute_category_probabilities(number_probs)
+        def category(values):
+            best = max(values, key=values.get)
+            return CategoryPrediction(best, values[best], values)
+        return FullPrediction(predictor=predictor, number=category(number_probs),
+                              **{name: category(values) for name, values in categories.items()},
+                              top_numbers=ranked_numbers(vector))
 
-        if not result.is_significant:
+    def _forecast(self, predictor, model, minimum, trained=True):
+        if len(self.history) < minimum:
+            self.statuses[predictor] = ModelStatus(Availability.INSUFFICIENT_DATA, f'Need {minimum} observations')
             return None
+        if not trained or model is None:
+            if self.statuses[predictor].state not in (Availability.FAILED, Availability.UNAVAILABLE):
+                self.statuses[predictor] = ModelStatus(Availability.UNTRAINED, 'Train this model first')
+            return None
+        try:
+            prediction = self.prediction_from_probabilities(predictor, model.predict_proba(self.history))
+            self.statuses[predictor] = ModelStatus(Availability.READY)
+            return prediction
+        except ImportError as error:
+            self.statuses[predictor] = ModelStatus(Availability.UNAVAILABLE, str(error))
+        except Exception as error:
+            self.statuses[predictor] = ModelStatus(Availability.FAILED, str(error))
+        return None
 
-        number_probs = result.number_probs
-        cat_probs = self._compute_category_probabilities(number_probs)
+    def _predict_lstm(self):
+        return self._forecast(PredictorType.LSTM, self.lstm_predictor, 10, self.is_lstm_trained)
 
-        top_numbers = [
-            (number, number_probs[number])
-            for number in result.selected_numbers
-            if number in number_probs
-        ]
-        if not top_numbers:
-            top_numbers = sorted(number_probs.items(), key=lambda x: x[1], reverse=True)[:10]
+    def _predict_extra_trees(self):
+        return self._forecast(PredictorType.EXTRA_TREES, self.extra_trees_predictor, 10, self.is_extra_trees_trained)
 
-        best_number = top_numbers[0] if top_numbers else (0, FAIR_PROBABILITY)
-        best_color = max(cat_probs["color"].items(), key=lambda x: x[1])
-        best_parity = max([(k, v) for k, v in cat_probs["parity"].items() if k != "zero"], key=lambda x: x[1])
-        best_high_low = max([(k, v) for k, v in cat_probs["high_low"].items() if k != "zero"], key=lambda x: x[1])
-        best_dozen = max([(k, v) for k, v in cat_probs["dozen"].items() if k != 0], key=lambda x: x[1])
-        best_column = max([(k, v) for k, v in cat_probs["column"].items() if k != 0], key=lambda x: x[1])
-        
-        return FullPrediction(
-            predictor=PredictorType.BIAS,
-            number=CategoryPrediction(best_number[0], best_number[1], number_probs),
-            color=CategoryPrediction(best_color[0], best_color[1], cat_probs["color"]),
-            parity=CategoryPrediction(best_parity[0], best_parity[1], cat_probs["parity"]),
-            high_low=CategoryPrediction(best_high_low[0], best_high_low[1], cat_probs["high_low"]),
-            dozen=CategoryPrediction(best_dozen[0], best_dozen[1], cat_probs["dozen"]),
-            column=CategoryPrediction(best_column[0], best_column[1], cat_probs["column"]),
-            top_numbers=top_numbers
-        )
-    
-    def _predict_extra_trees(self) -> Optional[FullPrediction]:
-        if not self.is_extra_trees_trained or len(self.history) < 20:
-            return None
-        
-        predicted, confidence = self.extra_trees_predictor.predict(self.history)
-        
-        number_probs = {i: FAIR_PROBABILITY for i in range(37)}
-        number_probs[predicted] = confidence
-        
-        total = sum(number_probs.values())
-        number_probs = {k: v / total for k, v in number_probs.items()}
-        
-        cat_probs = self._compute_category_probabilities(number_probs)
-        
-        top_numbers = sorted(number_probs.items(), key=lambda x: x[1], reverse=True)[:10]
-        
-        best_color = max(cat_probs["color"].items(), key=lambda x: x[1])
-        best_parity = max([(k, v) for k, v in cat_probs["parity"].items() if k != "zero"], key=lambda x: x[1])
-        best_high_low = max([(k, v) for k, v in cat_probs["high_low"].items() if k != "zero"], key=lambda x: x[1])
-        best_dozen = max([(k, v) for k, v in cat_probs["dozen"].items() if k != 0], key=lambda x: x[1])
-        best_column = max([(k, v) for k, v in cat_probs["column"].items() if k != 0], key=lambda x: x[1])
-        
-        return FullPrediction(
-            predictor=PredictorType.EXTRA_TREES,
-            number=CategoryPrediction(predicted, confidence, number_probs),
-            color=CategoryPrediction(best_color[0], best_color[1], cat_probs["color"]),
-            parity=CategoryPrediction(best_parity[0], best_parity[1], cat_probs["parity"]),
-            high_low=CategoryPrediction(best_high_low[0], best_high_low[1], cat_probs["high_low"]),
-            dozen=CategoryPrediction(best_dozen[0], best_dozen[1], cat_probs["dozen"]),
-            column=CategoryPrediction(best_column[0], best_column[1], cat_probs["column"]),
-            top_numbers=top_numbers
-        )
-    
-    def _predict_dqn(self) -> Optional[FullPrediction]:
-        if self.dqn_predictor.model is None or len(self.history) < 20:
-            return None
-        
-        predictions = self.dqn_predictor.predict_from_history(self.history)
-        
-        num_pred, num_conf = predictions["number"]
-        
-        number_probs = {i: FAIR_PROBABILITY for i in range(37)}
-        number_probs[num_pred] = num_conf
-        
-        total = sum(number_probs.values())
-        number_probs = {k: v / total for k, v in number_probs.items()}
-        
-        cat_probs = self._compute_category_probabilities(number_probs)
-        top_numbers = sorted(number_probs.items(), key=lambda x: x[1], reverse=True)[:10]
-        
-        return FullPrediction(
-            predictor=PredictorType.DQN,
-            number=CategoryPrediction(num_pred, num_conf, number_probs),
-            color=CategoryPrediction(predictions["color"][0], predictions["color"][1], cat_probs["color"]),
-            parity=CategoryPrediction(predictions["parity"][0], predictions["parity"][1], cat_probs["parity"]),
-            high_low=CategoryPrediction(predictions["high_low"][0], predictions["high_low"][1], cat_probs["high_low"]),
-            dozen=CategoryPrediction(predictions["dozen"][0], predictions["dozen"][1], cat_probs["dozen"]),
-            column=CategoryPrediction(predictions["column"][0], predictions["column"][1], cat_probs["column"]),
-            top_numbers=top_numbers
-        )
-    
-    def predict_all(self) -> Dict[PredictorType, Optional[FullPrediction]]:
-        return {
-            PredictorType.LSTM: self._predict_lstm(),
-            PredictorType.DQN: self._predict_dqn(),
-            PredictorType.EXTRA_TREES: self._predict_extra_trees(),
-            PredictorType.BIAS: self._predict_bias()
-        }
-    
-    def get_consensus_prediction(self) -> Optional[FullPrediction]:
-        predictions = self.predict_all()
-        valid_predictions = [p for p in predictions.values() if p is not None]
-        
-        if not valid_predictions:
-            return None
-        
-        number_votes: Dict[int, float] = {}
-        color_votes: Dict[str, float] = {}
-        parity_votes: Dict[str, float] = {}
-        high_low_votes: Dict[str, float] = {}
-        dozen_votes: Dict[int, float] = {}
-        column_votes: Dict[int, float] = {}
-        
-        for pred in valid_predictions:
-            for num, prob in pred.number.all_probabilities.items():
-                number_votes[num] = number_votes.get(num, 0) + prob
-            for color, prob in pred.color.all_probabilities.items():
-                color_votes[color] = color_votes.get(color, 0) + prob
-            for parity, prob in pred.parity.all_probabilities.items():
-                parity_votes[parity] = parity_votes.get(parity, 0) + prob
-            for hl, prob in pred.high_low.all_probabilities.items():
-                high_low_votes[hl] = high_low_votes.get(hl, 0) + prob
-            for dozen, prob in pred.dozen.all_probabilities.items():
-                dozen_votes[dozen] = dozen_votes.get(dozen, 0) + prob
-            for column, prob in pred.column.all_probabilities.items():
-                column_votes[column] = column_votes.get(column, 0) + prob
-        
-        n = len(valid_predictions)
-        number_probs = {k: v / n for k, v in number_votes.items()}
-        color_probs = {k: v / n for k, v in color_votes.items()}
-        parity_probs = {k: v / n for k, v in parity_votes.items()}
-        high_low_probs = {k: v / n for k, v in high_low_votes.items()}
-        dozen_probs = {k: v / n for k, v in dozen_votes.items()}
-        column_probs = {k: v / n for k, v in column_votes.items()}
-        
-        top_numbers = sorted(number_probs.items(), key=lambda x: x[1], reverse=True)[:10]
-        best_number = top_numbers[0]
-        best_color = max(color_probs.items(), key=lambda x: x[1])
-        best_parity = max([(k, v) for k, v in parity_probs.items() if k != "zero"], key=lambda x: x[1])
-        best_high_low = max([(k, v) for k, v in high_low_probs.items() if k != "zero"], key=lambda x: x[1])
-        best_dozen = max([(k, v) for k, v in dozen_probs.items() if k != 0], key=lambda x: x[1])
-        best_column = max([(k, v) for k, v in column_probs.items() if k != 0], key=lambda x: x[1])
-        
-        return FullPrediction(
-            predictor=PredictorType.BIAS,
-            number=CategoryPrediction(best_number[0], best_number[1], number_probs),
-            color=CategoryPrediction(best_color[0], best_color[1], color_probs),
-            parity=CategoryPrediction(best_parity[0], best_parity[1], parity_probs),
-            high_low=CategoryPrediction(best_high_low[0], best_high_low[1], high_low_probs),
-            dozen=CategoryPrediction(best_dozen[0], best_dozen[1], dozen_probs),
-            column=CategoryPrediction(best_column[0], best_column[1], column_probs),
-            top_numbers=top_numbers
-        )
-    
-    def validate_prediction(self, actual_number: int):
-        predictions = self.predict_all()
+    def _predict_bias(self):
+        return self._forecast(PredictorType.BIAS, self.bias_aware_predictor, self.bias_aware_predictor.config.min_spins)
+
+    def predict_all(self):
+        with self.training_lock:
+            if self._pending_predictions is None:
+                self._pending_predictions = {
+                    PredictorType.LSTM: self._predict_lstm(),
+                    PredictorType.EXTRA_TREES: self._predict_extra_trees(),
+                    PredictorType.BIAS: self._predict_bias(),
+                }
+            return dict(self._pending_predictions)
+
+    def get_consensus_prediction(self, predictions=None):
+        predictions = self.predict_all() if predictions is None else predictions
+        valid = [prediction for kind, prediction in predictions.items()
+                 if prediction is not None and kind not in (PredictorType.DQN, PredictorType.CONSENSUS, PredictorType.FAIR)]
+        if not valid:
+            return self.prediction_from_probabilities(PredictorType.FAIR, np.full(37, FAIR_PROBABILITY))
+        vectors = [validate_probabilities(prediction.number.all_probabilities) for prediction in valid]
+        return self.prediction_from_probabilities(PredictorType.CONSENSUS, np.mean(vectors, axis=0))
+
+    def get_policy_decision(self, bankroll=1000.0, initial_bankroll=1000.0, stake=1.0):
+        if not self.model_path:
+            return PolicyDecision('dqn', None, None, ModelStatus(Availability.UNAVAILABLE, 'No checkpoint selected'))
+        if len(self.history) < 20:
+            return PolicyDecision('dqn', None, None, ModelStatus(Availability.INSUFFICIENT_DATA, 'Need 20 observations'))
+        try:
+            if self.policy_agent is None:
+                if self.training_in_progress:
+                    return PolicyDecision('dqn', None, None, ModelStatus(
+                        Availability.UNAVAILABLE, 'Wait for training to finish before loading the policy'))
+                from src.agents.dqn_agent import DQNAgent
+                from src.checkpoints import capture_rng, restore_rng
+                rng = capture_rng()
+                try:
+                    candidate = DQNAgent(device=self.device)
+                    self.policy_metadata = candidate.load(self.model_path)
+                    if candidate.action_size != 47:
+                        raise ValueError('Policy must use the 47-action roulette contract')
+                    self.policy_agent = candidate
+                finally:
+                    restore_rng(rng)
+            mask = np.ones(self.policy_agent.action_size, dtype=bool)
+            if bankroll < stake:
+                mask[:46] = False
+            action = self.policy_agent.act(np.asarray(self.history[-self.policy_agent.history_size:]),
+                                           bankroll / initial_bankroll, training=False, action_mask=mask)
+            return PolicyDecision('dqn', action, 0.0 if action == 46 else stake)
+        except ImportError as error:
+            return PolicyDecision('dqn', None, None, ModelStatus(Availability.UNAVAILABLE, str(error)))
+        except Exception as error:
+            return PolicyDecision('dqn', None, None, ModelStatus(Availability.FAILED, str(error)))
+
+    def validate_prediction(self, actual_number: int, predictions=None):
+        validate_number(actual_number)
+        if self._validated_version == self.data_version:
+            raise RuntimeError('Predictions for this observation were already validated')
+        predictions = self._pending_predictions if predictions is None else predictions
+        if predictions is None:
+            raise RuntimeError('No prediction was emitted before this outcome')
+        self._validated_version = self.data_version
         
         actual_color = self.get_number_color(actual_number)
         actual_parity = self.get_number_parity(actual_number)
@@ -419,232 +347,101 @@ class PredictionEngine:
         
         return best_type
     
-    def backtest_history(self, min_history: int = 20, train_ratio: float = 0.7) -> Dict[str, Any]:
-        if len(self.history) < min_history + 10:
-            return {"error": "Not enough history for backtesting"}
-        
-        train_size = int(len(self.history) * train_ratio)
-        train_size = max(train_size, min_history)
-        
-        train_data = self.history[:train_size]
-        test_data = self.history[train_size:]
-        
-        if len(test_data) < 5:
-            return {"error": "Not enough test data after split"}
-        
-        temp_lstm_predictor = LSTMPredictor(sequence_length=10, force_gpu=True)
-        temp_extra_trees = ExtraTreesPredictor()
-        
-        if len(train_data) >= 20:
-            temp_lstm_predictor.fit(train_data, epochs=30)
-        
-        if len(train_data) >= 30:
-            temp_extra_trees.fit(train_data)
-        
-        for pt in PredictorType:
-            self.stats[pt] = PredictorStats(predictor=pt)
-        
-        results = {"tested": 0, "train_size": train_size, "test_size": len(test_data)}
-        
-        for i, actual_number in enumerate(test_data):
-            context_history = train_data + test_data[:i]
-            
-            if len(context_history) < 10:
+    def backtest_history(self, min_history: int = 20, train_ratio: float = 0.7, config=None):
+        from src.utils.evaluation_harness import EvaluationConfig, evaluate_walk_forward
+        return evaluate_walk_forward(list(self.history), config or EvaluationConfig())
+
+    def _fit_snapshot(self, history, version, epochs, cancel_event, models=('lstm', 'extra_trees')):
+        candidates = {}
+        results = {}
+        for kind in (PredictorType.LSTM, PredictorType.EXTRA_TREES):
+            if kind.value not in models:
+                results[kind.value] = {'status': 'unavailable', 'message': 'Not requested'}
                 continue
-            
-            actual_color = self.get_number_color(actual_number)
-            actual_parity = self.get_number_parity(actual_number)
-            actual_high_low = self.get_number_high_low(actual_number)
-            actual_dozen = self.get_number_dozen(actual_number)
-            actual_column = self.get_number_column(actual_number)
-            
-            if temp_lstm_predictor.model is not None:
-                try:
-                    top_numbers = temp_lstm_predictor.predict_top_n(context_history, n=10)
-                    if top_numbers:
-                        pred_num = top_numbers[0][0]
-                        pred_dozen = self.get_number_dozen(pred_num)
-                        pred_column = self.get_number_column(pred_num)
-                        pred_color = self.get_number_color(pred_num)
-                        pred_parity = self.get_number_parity(pred_num)
-                        pred_high_low = self.get_number_high_low(pred_num)
-                        
-                        stats = self.stats[PredictorType.LSTM]
-                        stats.total_predictions += 1
-                        if pred_num == actual_number:
-                            stats.number_correct += 1
-                        if pred_color == actual_color:
-                            stats.color_correct += 1
-                        if pred_parity == actual_parity:
-                            stats.parity_correct += 1
-                        if pred_high_low == actual_high_low:
-                            stats.high_low_correct += 1
-                        
-                        self._update_dozen_column_stats(stats, pred_dozen, actual_dozen, pred_column, actual_column)
-                except Exception:
-                    pass
-            
-            if temp_extra_trees.is_fitted:
-                try:
-                    pred_num, _ = temp_extra_trees.predict(context_history)
-                    pred_dozen = self.get_number_dozen(pred_num)
-                    pred_column = self.get_number_column(pred_num)
-                    pred_color = self.get_number_color(pred_num)
-                    pred_parity = self.get_number_parity(pred_num)
-                    pred_high_low = self.get_number_high_low(pred_num)
-                    
-                    stats = self.stats[PredictorType.EXTRA_TREES]
-                    stats.total_predictions += 1
-                    if pred_num == actual_number:
-                        stats.number_correct += 1
-                    if pred_color == actual_color:
-                        stats.color_correct += 1
-                    if pred_parity == actual_parity:
-                        stats.parity_correct += 1
-                    if pred_high_low == actual_high_low:
-                        stats.high_low_correct += 1
-                    
-                    self._update_dozen_column_stats(stats, pred_dozen, actual_dozen, pred_column, actual_column)
-                except Exception:
-                    pass
-            
-            if self.dqn_predictor.model is not None and len(context_history) >= 20:
-                try:
-                    predictions = self.dqn_predictor.predict_from_history(context_history)
-                    pred_num, _ = predictions["number"]
-                    pred_dozen = self.get_number_dozen(pred_num)
-                    pred_column = self.get_number_column(pred_num)
-                    pred_color = self.get_number_color(pred_num)
-                    pred_parity = self.get_number_parity(pred_num)
-                    pred_high_low = self.get_number_high_low(pred_num)
-                    
-                    stats = self.stats[PredictorType.DQN]
-                    stats.total_predictions += 1
-                    if pred_num == actual_number:
-                        stats.number_correct += 1
-                    if pred_color == actual_color:
-                        stats.color_correct += 1
-                    if pred_parity == actual_parity:
-                        stats.parity_correct += 1
-                    if pred_high_low == actual_high_low:
-                        stats.high_low_correct += 1
-                    
-                    self._update_dozen_column_stats(stats, pred_dozen, actual_dozen, pred_column, actual_column)
-                except Exception:
-                    pass
-            
-            if len(context_history) >= 50:
-                counter = Counter(context_history)
-                pred_num = counter.most_common(1)[0][0]
-                pred_dozen = self.get_number_dozen(pred_num)
-                pred_column = self.get_number_column(pred_num)
-                pred_color = self.get_number_color(pred_num)
-                pred_parity = self.get_number_parity(pred_num)
-                pred_high_low = self.get_number_high_low(pred_num)
-                
-                stats = self.stats[PredictorType.BIAS]
-                stats.total_predictions += 1
-                if pred_num == actual_number:
-                    stats.number_correct += 1
-                if pred_color == actual_color:
-                    stats.color_correct += 1
-                if pred_parity == actual_parity:
-                    stats.parity_correct += 1
-                if pred_high_low == actual_high_low:
-                    stats.high_low_correct += 1
-                
-                self._update_dozen_column_stats(stats, pred_dozen, actual_dozen, pred_column, actual_column)
-            
-            results["tested"] += 1
-        
-        results["models_status"] = {
-            "lstm_trained": temp_lstm_predictor.model is not None,
-            "extra_trees_trained": temp_extra_trees.is_fitted,
-            "dqn_loaded": self.dqn_predictor.model is not None,
-            "history_length": len(self.history)
-        }
-        
+            if cancel_event.is_set():
+                results[kind.value] = {'status': 'cancelled', 'message': 'Training cancelled'}
+                continue
+            try:
+                if kind == PredictorType.LSTM:
+                    from src.utils.lstm_predictor import LSTMPredictor
+                    from src.checkpoints import seed_everything
+                    seed_everything(self.seed, self.device)
+                    model = LSTMPredictor(device=self.device)
+                    result = model.fit(history, epochs=epochs, cancel_event=cancel_event)
+                    fitted = model.is_trained
+                else:
+                    model = ExtraTreesPredictor(seed=self.seed)
+                    result = model.fit(history)
+                    fitted = model.is_fitted
+                results[kind.value] = result or {'status': 'failed', 'message': 'Training produced no result'}
+                if fitted:
+                    candidates[kind] = model
+            except ImportError as error:
+                results[kind.value] = {'status': 'unavailable', 'message': str(error)}
+            except Exception as error:
+                results[kind.value] = {'status': 'failed', 'message': str(error)}
+        with self.training_lock:
+            if version != self.data_version or cancel_event.is_set():
+                return {'status': 'cancelled', 'message': 'Session or history changed during training', 'models': results}
+            self.lstm_predictor = candidates.get(PredictorType.LSTM)
+            self.extra_trees_predictor = candidates.get(PredictorType.EXTRA_TREES)
+            self.is_lstm_trained = self.lstm_predictor is not None
+            self.is_extra_trees_trained = self.extra_trees_predictor is not None
+            for kind in (PredictorType.LSTM, PredictorType.EXTRA_TREES):
+                result = results[kind.value]
+                state = Availability.READY if kind in candidates else {
+                    'unavailable': Availability.UNAVAILABLE, 'insufficient_data': Availability.INSUFFICIENT_DATA,
+                    'error': Availability.INSUFFICIENT_DATA}.get(result['status'], Availability.FAILED)
+                self.statuses[kind] = ModelStatus(state, result.get('message', ''))
+            self._pending_predictions = None
         return results
-    
-    def _update_dozen_column_stats(self, stats: PredictorStats, pred_dozen: int, actual_dozen: int, pred_column: int, actual_column: int):
-        if pred_dozen == 1:
-            stats.dozen1_predictions += 1
-            if actual_dozen == 1:
-                stats.dozen1_correct += 1
-        elif pred_dozen == 2:
-            stats.dozen2_predictions += 1
-            if actual_dozen == 2:
-                stats.dozen2_correct += 1
-        elif pred_dozen == 3:
-            stats.dozen3_predictions += 1
-            if actual_dozen == 3:
-                stats.dozen3_correct += 1
-        
-        if pred_column == 1:
-            stats.column1_predictions += 1
-            if actual_column == 1:
-                stats.column1_correct += 1
-        elif pred_column == 2:
-            stats.column2_predictions += 1
-            if actual_column == 2:
-                stats.column2_correct += 1
-        elif pred_column == 3:
-            stats.column3_predictions += 1
-            if actual_column == 3:
-                stats.column3_correct += 1
-        
-        return results
-    
-    def train_async(
-        self, 
-        epochs: int = 50,
-        on_complete: Optional[Callable] = None
-    ):
-        if self.training_in_progress:
-            return
-        
-        self.on_training_complete = on_complete
-        
-        def train_worker():
-            with self.training_lock:
-                self.training_in_progress = True
-                
-                if len(self.history) >= 20:
-                    self.lstm_predictor.fit(self.history, epochs=epochs)
-                    self.is_lstm_trained = True
-                
-                if len(self.history) >= 30:
-                    self.extra_trees_predictor.fit(self.history)
-                    self.is_extra_trees_trained = self.extra_trees_predictor.is_fitted
-                
-                self.training_in_progress = False
-                
-                if self.on_training_complete:
-                    self.on_training_complete()
-        
-        thread = threading.Thread(target=train_worker, daemon=True)
+
+    def _begin_training(self):
+        with self.training_lock:
+            if self.training_in_progress:
+                raise RuntimeError('Training is already running')
+            self.training_in_progress = True
+            self.cancel_event = threading.Event()
+            return list(self.history), self.data_version, self.cancel_event
+
+    def train_async(self, epochs: int = 30, on_complete: Optional[Callable] = None):
+        history, version, cancel_event = self._begin_training()
+        def worker():
+            try:
+                self.last_training_result = self._fit_snapshot(history, version, epochs, cancel_event)
+            except Exception as error:
+                self.last_training_result = {'status': 'failed', 'message': str(error)}
+            finally:
+                with self.training_lock:
+                    self.training_in_progress = False
+                if on_complete:
+                    on_complete()
+        thread = threading.Thread(target=worker, daemon=True)
         thread.start()
-    
-    def train_sync(self, epochs: int = 50) -> Dict[str, Any]:
-        results = {"lstm": None, "extra_trees": None}
-        
-        if len(self.history) >= 20:
-            results["lstm"] = self.lstm_predictor.fit(self.history, epochs=epochs)
-            self.is_lstm_trained = True
-        
-        if len(self.history) >= 30:
-            self.extra_trees_predictor.fit(self.history)
-            self.is_extra_trees_trained = self.extra_trees_predictor.is_fitted
-            results["extra_trees"] = {"fitted": self.is_extra_trees_trained}
-        
-        return results
-    
-    def get_status(self) -> Dict[str, Any]:
+        return thread
+
+    def train_sync(self, epochs: int = 30, models=('lstm', 'extra_trees'), cancel_event=None):
+        history, version, local_cancel = self._begin_training()
+        cancel_event = cancel_event if cancel_event is not None else local_cancel
+        try:
+            self.last_training_result = self._fit_snapshot(history, version, epochs, cancel_event, models=models)
+            return self.last_training_result
+        finally:
+            with self.training_lock:
+                self.training_in_progress = False
+
+    def cancel_training(self):
+        self.cancel_event.set()
+
+    def get_status(self):
         return {
-            "history_size": len(self.history),
-            "lstm_trained": self.is_lstm_trained,
-            "extra_trees_trained": self.is_extra_trees_trained,
-            "dqn_loaded": self.dqn_predictor.model is not None,
-            "training_in_progress": self.training_in_progress,
-            "device": str(self.lstm_predictor.device)
+            'history_size': len(self.history), 'lstm_trained': self.is_lstm_trained,
+            'extra_trees_trained': self.is_extra_trees_trained,
+            'dqn_loaded': self.policy_agent is not None,
+            'training_in_progress': self.training_in_progress, 'device': self.device,
+            'executed_devices': {'lstm': str(self.lstm_predictor.device) if self.lstm_predictor else None,
+                                 'dqn': str(self.policy_agent.device) if self.policy_agent else None,
+                                 'extra_trees': 'cpu' if self.is_extra_trees_trained else None},
+            'models': {kind.value: {'state': status.state.value, 'reason': status.reason}
+                       for kind, status in self.statuses.items()},
         }

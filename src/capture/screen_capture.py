@@ -62,6 +62,7 @@ class ScreenCapture:
         self.on_change_callback: Optional[Callable[[Image.Image], None]] = None
         self.change_threshold = 0.05
         self.check_interval = 0.5
+        self.stop_event = threading.Event()
     
     def set_region(self, x: int, y: int, width: int, height: int):
         self.region = CaptureRegion(x, y, width, height)
@@ -107,6 +108,9 @@ class ScreenCapture:
     ):
         if self.region is None:
             raise ValueError("Region not set. Call set_region first.")
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            raise RuntimeError('Previous capture thread is still running')
+        self.stop_event.clear()
         
         self.on_change_callback = on_change
         self.check_interval = check_interval
@@ -119,9 +123,11 @@ class ScreenCapture:
     
     def stop_monitoring(self):
         self.is_monitoring = False
-        if self.monitor_thread:
+        self.stop_event.set()
+        if self.monitor_thread and self.monitor_thread is not threading.current_thread():
             self.monitor_thread.join(timeout=2)
-            self.monitor_thread = None
+            if not self.monitor_thread.is_alive():
+                self.monitor_thread = None
     
     def _monitor_loop(self):
         stable_count = 0
@@ -131,14 +137,14 @@ class ScreenCapture:
         while self.is_monitoring:
             img = self.capture()
             if img is None:
-                time.sleep(self.check_interval)
+                self.stop_event.wait(self.check_interval)
                 continue
             
             current_array = self._image_to_array(img)
             
             if self.last_image is None:
                 self.last_image = current_array
-                time.sleep(self.check_interval)
+                self.stop_event.wait(self.check_interval)
                 continue
             
             diff = self._calculate_difference(self.last_image, current_array)
@@ -152,13 +158,13 @@ class ScreenCapture:
                 stable_count += 1
                 if stable_count >= 3:
                     waiting_for_stable = False
-                    if self.on_change_callback:
+                    if self.on_change_callback and not self.stop_event.is_set():
                         try:
                             self.on_change_callback(img)
                         except Exception as e:
                             print(f"[ScreenCapture] Callback error: {e}")
             
-            time.sleep(self.check_interval)
+            self.stop_event.wait(self.check_interval)
     
     def get_monitors_info(self) -> List[dict]:
         with _mss_lock:

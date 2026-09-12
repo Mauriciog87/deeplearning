@@ -10,6 +10,7 @@ to select from multiple Low-Level Heuristics (betting strategies).
 import argparse
 import os
 import time
+import copy
 from datetime import datetime
 from typing import Optional
 import numpy as np
@@ -17,6 +18,7 @@ import numpy as np
 from src.environment import RouletteEnv, RouletteEnvNearMissFlat
 from src.agents import HyperHeuristicAgent, DQNHyperHeuristic, LLHType
 from src.utils import WheelBiasAnalyzer
+from src.checkpoints import seed_everything
 
 
 def parse_args():
@@ -53,7 +55,7 @@ def parse_args():
     # Environment parameters
     parser.add_argument('--initial-bankroll', type=float, default=1000.0,
                         help='Starting bankroll')
-    parser.add_argument('--base-bet', type=float, default=10.0,
+    parser.add_argument('--base-bet', type=float, default=1.0,
                         help='Base bet amount')
     parser.add_argument('--use-near-miss', action='store_true',
                         help='Use near-miss enhanced environment')
@@ -69,11 +71,13 @@ def parse_args():
                         help='Directory to save models')
     parser.add_argument('--model-name', type=str, default='hh_agent',
                         help='Base name for saved models')
-    parser.add_argument('--seed', type=int, default=None,
+    parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
     parser.add_argument('--verbose', type=int, default=1,
                         help='Verbosity level (0=silent, 1=normal, 2=detailed)')
     
+    parser.add_argument('--resume', type=str)
+    parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
     return parser.parse_args()
 
 
@@ -91,7 +95,7 @@ def create_agent(args) -> HyperHeuristicAgent:
     }
     
     if args.agent_type == 'dqn':
-        return DQNHyperHeuristic(**agent_kwargs)
+        return DQNHyperHeuristic(**agent_kwargs, device=args.device)
     else:
         return HyperHeuristicAgent(**agent_kwargs)
 
@@ -100,10 +104,11 @@ def train_episode(
     agent: HyperHeuristicAgent,
     env,
     max_steps: int,
-    bias_analyzer: Optional[WheelBiasAnalyzer] = None
+    bias_analyzer: Optional[WheelBiasAnalyzer] = None,
+    seed: Optional[int] = None
 ) -> dict:
     """Train for one episode."""
-    obs, info = env.reset()
+    obs, info = env.reset(seed=seed)
     agent.reset_episode()
     
     episode_reward = 0.0
@@ -121,10 +126,10 @@ def train_episode(
             llh_usage[agent.current_llh] += 1
         
         # Execute action
-        obs, reward, terminated, truncated, info = env.step(action)
+        obs, reward, terminated, truncated, info = env.step(action, stake=bet_amount)
         
         # Get outcome (winning number)
-        outcome = info.get('winning_number', np.random.randint(0, 37))
+        outcome = info['winning_number']
         
         # Update bias detector
         if bias_analyzer:
@@ -138,7 +143,7 @@ def train_episode(
                     )
         
         # Update agent
-        agent.update(outcome, action, reward)
+        agent.update(outcome, action, reward, terminated=terminated, truncated=truncated)
         
         episode_reward += reward
         if reward > 0:
@@ -176,8 +181,8 @@ def evaluate_agent(
     total_losses = 0
     final_bankrolls = []
     
-    original_epsilon = agent.epsilon
-    agent.epsilon = 0.0  # No exploration during eval
+    agent = copy.deepcopy(agent)
+    env = copy.deepcopy(env)
     
     for _ in range(num_episodes):
         obs, info = env.reset()
@@ -185,15 +190,13 @@ def evaluate_agent(
         
         for step in range(max_steps):
             agent.select_llh(explore=False)
-            action, _ = agent.select_action(explore=False)
+            action, bet_amount = agent.select_action(explore=False)
             
-            obs, reward, terminated, truncated, info = env.step(action)
-            outcome = info.get('winning_number', np.random.randint(0, 37))
+            obs, reward, terminated, truncated, info = env.step(action, stake=bet_amount)
+            outcome = info['winning_number']
             
             # Update without learning
-            agent.spin_history.append(outcome)
-            agent.reward_history.append(reward)
-            agent.bankroll += reward
+            agent.update(outcome, action, reward, learn=False, terminated=terminated, truncated=truncated)
             
             total_reward += reward
             if reward > 0:
@@ -206,7 +209,6 @@ def evaluate_agent(
         
         final_bankrolls.append(agent.bankroll)
     
-    agent.epsilon = original_epsilon
     
     return {
         'avg_reward': total_reward / num_episodes,
@@ -233,28 +235,43 @@ def print_llh_statistics(agent: HyperHeuristicAgent):
 
 
 def main():
+    from src.console import configure_console
+    configure_console()
     args = parse_args()
     
     # Set random seeds
     if args.seed is not None:
-        np.random.seed(args.seed)
+        seed_everything(args.seed, args.device)
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Create environment
     if args.use_near_miss:
-        env = RouletteEnvNearMissFlat(initial_bankroll=args.initial_bankroll)
+        env = RouletteEnvNearMissFlat(initial_bankroll=args.initial_bankroll, bet_size=args.base_bet, max_steps=args.max_steps)
     else:
-        env = RouletteEnv(initial_bankroll=args.initial_bankroll)
+        env = RouletteEnv(initial_bankroll=args.initial_bankroll, bet_size=args.base_bet, max_steps=args.max_steps)
+    env.reset(seed=args.seed)
+    suffix = 'pt' if args.agent_type == 'dqn' else 'json'
     
     # Create agent
+    training_config = {'seed': args.seed, 'max_steps': args.max_steps,
+                       'initial_bankroll': args.initial_bankroll, 'base_bet': args.base_bet,
+                       'near_miss': args.use_near_miss, 'data_source': 'simulated',
+                       'bias_detection': args.enable_bias_detection, 'bias_window': args.bias_window}
     agent = create_agent(args)
+    if args.resume:
+        agent = type(agent).load(args.resume, **({'device': args.device} if args.agent_type == 'dqn' else {}))
+        if agent.extra.get('training_config') != training_config:
+            raise ValueError('Resume training configuration must match the checkpoint')
+    agent.extra = dict(getattr(agent, 'extra', {}), training_config=training_config)
     
     # Create bias analyzer if enabled
     bias_analyzer = None
     if args.enable_bias_detection:
         bias_analyzer = WheelBiasAnalyzer(min_spins_for_analysis=args.bias_window)
+        if args.resume:
+            bias_analyzer.spin_history = list(agent.extra.get('bias_history', []))
     
     print("=" * 70)
     print("🎰 Hyper-Heuristic Agent Training")
@@ -279,9 +296,12 @@ def main():
     
     start_time = time.time()
     
-    for episode in range(1, args.episodes + 1):
+    start_episode = agent.total_episodes
+    for episode in range(start_episode + 1, start_episode + args.episodes + 1):
         # Train one episode
-        result = train_episode(agent, env, args.max_steps, bias_analyzer)
+        result = train_episode(agent, env, args.max_steps, bias_analyzer, seed=args.seed + episode)
+        if bias_analyzer is not None:
+            agent.extra['bias_history'] = list(bias_analyzer.spin_history)
         
         all_rewards.append(result['reward'])
         all_bankrolls.append(result['final_bankroll'])
@@ -316,13 +336,13 @@ def main():
             # Save best model
             if eval_result['avg_reward'] > best_eval_reward:
                 best_eval_reward = eval_result['avg_reward']
-                best_path = os.path.join(args.output_dir, f'{args.model_name}_best.pkl')
+                best_path = os.path.join(args.output_dir, f'{args.model_name}_best.{suffix}')
                 agent.save(best_path)
                 print(f"   💾 New best model saved: {best_path}")
         
         # Periodic save
         if episode % args.save_interval == 0:
-            checkpoint_path = os.path.join(args.output_dir, f'{args.model_name}_ep{episode}.pkl')
+            checkpoint_path = os.path.join(args.output_dir, f'{args.model_name}_ep{episode}.{suffix}')
             agent.save(checkpoint_path)
             if args.verbose >= 1:
                 print(f"   💾 Checkpoint saved: {checkpoint_path}")
@@ -348,7 +368,7 @@ def main():
     print_llh_statistics(agent)
     
     # Save final model
-    final_path = os.path.join(args.output_dir, f'{args.model_name}_final.pkl')
+    final_path = os.path.join(args.output_dir, f'{args.model_name}_final.{suffix}')
     agent.save(final_path)
     print(f"\n💾 Final model saved: {final_path}")
     

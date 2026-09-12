@@ -1,452 +1,167 @@
-# RL Roulette 🎰
+# RL Roulette
 
-Deep Reinforcement Learning agent for European roulette using DQN with BatchNorm architecture, LSTM neural networks, and ensemble prediction models.
+A research application for European roulette (0–36), with a simulator, betting agents, probability forecasts, SQLite session storage, a CLI, and a CustomTkinter GUI.
 
-## Overview
+The simulator uses independent uniform outcomes by default. Every ordinary bet has expected net return −1/37 per unit staked under that model. PASS stakes nothing and earns zero. Historical patterns alone do not establish an advantage over an independent fair wheel.
 
-This project implements a sophisticated prediction system that combines multiple ML approaches for European roulette (0-36):
+## Install
 
-- **47 possible actions**: All straight bets (0-36), outside bets (Red/Black, Odd/Even, Low/High, Dozens), and PASS
-- **Real data support**: Train on actual roulette numbers stored in SQLite database
-- **Statistical analysis**: Chi-square tests, autocorrelation, pattern detection, O-U test
-- **Modern architecture**: BatchNorm + Dense layers (inspired by FAIRS-Roulette research)
-- **LSTM Predictor**: Sequence-based neural network with GPU acceleration (inspired by NeuralRoulette-AI)
-- **Fuzzy Adaptive Exploration**: Intelligent epsilon control using fuzzy logic
-- **Near-miss Analysis**: Wheel and table proximity features based on behavioral research
-- **Behavioral Agents**: Simulate human betting patterns (Gambler's Fallacy, Hot Hand)
-- **Bias Detection**: Formal Chi-square tests with Wilson confidence intervals
-- **Hyper-Heuristic Agent**: RL-based meta-learner that selects betting strategies (based on Li et al., 2024)
-- **Walk-Forward Backtesting**: Rigorous strategy validation with Kelly criterion
-- **GUI Application**: Modern CustomTkinter interface with real-time predictions
+The validated interpreter is **Python 3.12 on Windows x64**. Use a virtual environment; the system Python may be a different version.
 
-## Features
-
-- 🎯 **47-Action Space**: Bet on any number or combination
-- 📊 **SQLite Database**: Store and analyze real casino data
-- 🧠 **Multi-Model Predictions**: LSTM, DQN, ExtraTrees, and Bias-based predictors
-- 🖥️ **Modern GUI**: CustomTkinter interface with probability visualizations
-- 🚀 **GPU Acceleration**: CUDA support for RTX 3060 and similar GPUs
-- 📈 **Capital Context**: Agent considers current bankroll in decisions
-- 🔄 **Double DQN**: Stable value estimation
-- 📉 **Advanced Statistics**: JSD, Wasserstein distance, anomaly detection
-- 🎛️ **Fuzzy Epsilon Control**: Adaptive exploration based on performance
-- 🎯 **Near-Miss Features**: Wheel and table proximity for behavioral insights
-- 🤖 **Behavioral Agents**: Simulate real human betting patterns
-- 🧬 **Hyper-Heuristic Agent**: Meta-level Q-Learning to select from 10 betting strategies
-
-## Installation
-
-```bash
-pip install -r requirements.txt
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-core.txt
 ```
 
-Required packages:
-- torch>=2.0 (with CUDA support recommended)
-- gymnasium>=0.29
-- numpy
-- matplotlib
-- tqdm
-- scipy
-- scikit-learn
-- customtkinter>=5.0
+Choose a profile:
 
-### GPU Support (Recommended)
+| File | Includes |
+| --- | --- |
+| requirements-core.txt | Database, simulation, statistical analysis, baseline evaluation and plots; no Torch |
+| requirements-ml.txt | Core plus PyTorch and scikit-learn |
+| requirements-gui.txt | ML plus CustomTkinter |
+| requirements-capture.txt | ML plus EasyOCR, torchvision, MSS, Pillow and PyAutoGUI |
+| requirements.txt | All profiles |
 
-For NVIDIA GPUs (RTX 3060, etc.):
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+Install the matching PyTorch/torchvision pair before the ML or full profile. These commands use the versions pinned in this repository.
+
+CPU:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## Quick Start
+CUDA 12.4, with a compatible NVIDIA driver:
 
-### 1. Launch the GUI (Recommended)
-
-```bash
-# Start the prediction GUI
-python roulette_gui.py
-
-# With a pre-trained DQN model
-python roulette_gui.py models/roulette_agent.pt
+```powershell
+.\.venv\Scripts\python.exe -m pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-The GUI provides:
-- Session management (create/load sessions)
-- Real-time number input
-- Multi-model predictions (LSTM, DQN, ExtraTrees, Bias)
-- Probability bars for all categories
-- Top-10 number fan visualization
-- Predictor accuracy comparison table
+Use `--device cpu`, `--device cuda`, or `--device auto`. Explicit CUDA requests fail if CUDA is unavailable. EasyOCR may download its recognition models on first use. Import checks do not perform OCR or validate a live capture region.
 
-### 2. Train an agent
+Direct dependencies are pinned. Transitive packages are resolved by pip; evaluation manifests record the installed scientific package versions.
 
-```bash
-# Train with simulated random data
-python train.py --episodes 1000
+## Run
 
-# Train with Fuzzy Adaptive epsilon control
-python train.py --episodes 1000 --fuzzy-adaptive
+After activating the environment, use:
 
-# Train with real data from database
-python train.py --use-real-data --episodes 500
-
-# Resume training from checkpoint
-python train.py --resume models/checkpoint.pt --episodes 500
+```powershell
+python roulette_gui.py --device cpu
+python roulette_gui.py models/roulette_agent.pt --device cuda
+python roulette_cli.py --help
+python roulette_cli.py session create "Wheel A"
+python roulette_cli.py add 7 0 12 7 --session "Wheel A"
+python roulette_cli.py predict --session 1
+python test_capture.py
 ```
 
-### 2. Test the agent
+Keep independent wheels and recording sessions separate. The database returns observations in timestamp/ID order. Evaluations, training sequences, transitions, and rolling diagnostics do not concatenate sessions.
 
-```bash
-# Test with simulated data
-python test.py --episodes 100
+The GUI shows LSTM, ExtraTrees and frequency-based forecasts separately from the DQN betting policy. Models report ready, untrained, insufficient data, unavailable or failed. When no forecast model is active, the displayed distribution is explicitly labeled **Fair baseline**. It is not an ensemble.
 
-# Test with real data
-python test.py --use-real-data --episodes 100
+A prediction is recorded before the next result is entered. Adding that result settles the pending records in the same database transaction. Accuracy tables are derived from those records, scoped to the selected session. Repeated requests for the same prediction are idempotent. CLI baselines displayed during prediction are also logged.
 
-# Compare trained vs random agent
-python test.py --compare-random --episodes 100
+GUI training and backtests use snapshots. Completion, failure and cancellation return through the UI event queue. Results for an obsolete session or history version are discarded. Closing the window cancels work; it does not publish late results.
+
+## Temporal evaluation
+
+```powershell
+python roulette_cli.py evaluate --session 1 --device cpu --output reports/evaluation.json
+python roulette_cli.py evaluate --models --runs 1 --no-intervals
+python roulette_cli.py evaluate --model models/roulette_agent.pt --device cuda
 ```
 
-### 3. Manage real data
+An empty `--models` list runs baselines only. The default configuration is:
 
-```bash
-# Add numbers manually
-python roulette_cli.py add 17 23 0 5 32
+| Parameter | Default |
+| --- | --- |
+| Train / test / step | 500 / 100 / 100 observations, within each session |
+| Training runs | 5, with seeds 42–46 |
+| LSTM epochs | 30 per training fold and run |
+| Betting projection | Top 5 numbers, 1 unit **per number** |
+| Initial bankroll | 1,000 per model, run and session |
+| Bootstrap | 2,000 resamples, 95% intervals |
+| Calibration | At most 10 adaptive bins, target 20 observations per bin |
+| Device | auto |
 
-# Interactive mode (enter numbers one by one)
-python roulette_cli.py interactive
+Overlapping test folds are rejected. LSTM and ExtraTrees are fitted only on each training window. Forecasts use the available prefix before each test outcome. Parameters remain fixed during a test fold; the observed prefix advances after each result. Insufficient sessions are reported and skipped.
 
-# Import from CSV
-python roulette_cli.py import casino_data.csv
+Each forecast supplies a validated probability vector over all 37 outcomes and a complete ranking. Number and category displays come from the same vector, including zero. Q-values are not converted to outcome probabilities.
 
-# View statistics
-python roulette_cli.py stats
+The harness reports Top-1/3/5/10, log loss, multiclass Brier score, confidence ECE, classwise ECE, top-k calibration, actual exposure, net profit, ROI and drawdown. Log loss uses a reported probability floor of 1e-12. Tied probabilities stay together in calibration bins; classwise ECE computes each class error before averaging.
 
-# List sessions
-python roulette_cli.py sessions
+With five straight bets, a hit earns +31 units net and a miss loses 5. An unaffordable betting projection becomes PASS. Capital carries across folds within each model/run/session. ROI divides total net profit by total money staked. PASS has zero profit and no defined ROI. Policy-only rows have no forecast scores.
+
+DQN evaluation requires a versioned checkpoint with training provenance. A real-data checkpoint is excluded from any fold that overlaps its training observations or cannot be matched to its dataset. Its action and stake are evaluated separately from probability forecasts. Paired profit per observation allows comparison with PASS.
+
+Intervals resample training runs and circular temporal blocks within sessions. Each temporal draw is shared across seeds, so repeating a baseline under several seeds does not create extra independent observations. Paired comparisons reuse the same observations and resampled indices. They are conditional on this dataset and assume approximately stationary dependence within blocks. They do not establish future profitability. The JSON export includes rows, configuration, seeds, dataset SHA-256, source/session/spin IDs, fold partitions, model status and executed devices.
+
+The GUI Backtest button uses this same harness and its defaults. Passive replay can settle any roulette action from an observed result without propensity weighting, provided bets do not affect outcomes or which outcomes were observed. The legacy OPE section lists additional logging needed for action-dependent IPS/DR applications.
+
+## Train and resume agents
+
+```powershell
+python train.py --episodes 100 --seed 42 --device cpu --unit-stake 1
+python train.py --use-real-data --episodes 100 --seed 42 --device cuda
+python train.py --resume models/roulette_agent.pt --episodes 100 --seed 42 --device cpu
+python test.py --model models/roulette_agent.pt --use-real-data --device cpu
+python train_hh.py --agent-type qlearning --episodes 100 --base-bet 1
+python test_hh.py --model models/hh_agent_final.json --base-bet 1
+python compare_agents.py --base-bet 1
 ```
 
-## Database & Data Dump
+Real-data DQN training reserves the last 20% of each session chronologically. Testing requires the checkpoint's exact dataset partition and visits the reserved outcomes once, using the preceding history only as context. Missing data or checkpoints produce errors; training and testing never silently switch to synthetic data.
 
-This project provides utilities to create and export the SQLite schema and data used for training and analysis:
+Simulation seeds cover environment outcomes and agent randomness. Real sequences end without wrapping. Episode termination suppresses DQN bootstrapping; truncation preserves it. Next-action masks apply when selecting the target action. An environment validates stakes before consuming an outcome.
 
-- Initialize a fresh local database (creates schema):
-```
-python scripts/create_db.py
-```
+Hyper-heuristic strategies pass their actual stake to the environment, including progression amounts. Evaluation updates their history and bankroll with learning disabled. Training evaluation uses independent copies.
 
-- Generate an SQL dump of your local database (saved to `data/roulette_dump.sql`):
-```
-python scripts/dump_db.py
-```
+Version-2 checkpoints save online and target networks, optimizer, replay, exploration state, counters, RNG state, observation contract and metadata. Fuzzy and hyper-heuristic checkpoints also preserve controller/strategy state. Writes are atomic. Neural files load with `weights_only=True`; tabular HH uses JSON. Legacy `.pkl` and older neural checkpoints must be retrained.
 
-- Recreate a database from the tracked SQL dump:
-```
-sqlite3 data/roulette.db < data/roulette_dump.sql
+Resume requires matching training configuration. Exact continuation is tested on the same device/software stack; it is not guaranteed across CPU/GPU or PyTorch releases. Agent training checkpoints are taken at episode boundaries. Experimental physics remains an explicit environment option and does not model a measured real wheel.
+
+## Statistical diagnostics and capture
+
+```powershell
+python roulette_cli.py randomness --session 1 --resamples 9999 --seed 42 --fdr-method by
+python roulette_cli.py heatmaps --session 1 --output-dir reports/heatmaps/session_1
 ```
 
-We track `data/roulette_dump.sql` so it can be shared between machines, but `data/roulette.db` (the runtime DB) remains ignored to avoid committing runtime data.
+Sparse frequency tables use multinomial Monte Carlo; sufficiently populated tables use chi-square asymptotics. Temporal dependence and scanned drift statistics use whole-sequence permutations, recalculating the scan in each permutation. Entropy drift compares windows with one another, so a stable nonuniform distribution does not automatically imply drift.
 
-## Models & Artifacts
+Benjamini–Yekutieli correction is the default for dependent families of tests. BH is an explicit alternative where supported. Heatmap alerts use exact binomial p-values; z-scores describe severity. Neither correction removes serial dependence within a spin sequence or protects unrestricted repeated monitoring. Drift inference is labeled exploratory when the dependence screen rejects its null. Sector null probabilities reflect their actual pocket counts.
 
-Model weights and large artifacts (e.g., `*.pt`, `*.pkl`, training images) are not tracked by default and should be stored outside the repository or in an object store. The `models/` folder is kept with a `.gitkeep` so you can place downloaded models there locally.
+OCR observations retain event IDs, timestamps, confidence and pending/accepted state. History reconciliation uses sequence overlap and preserves repeated numbers when they represent separate events. Ambiguous or low-confidence observations remain pending for review; they are not silently inserted. A green background alone is not recognized as zero.
 
-Suggested workflow for model files:
-- Store models in a cloud bucket or a release asset
-- Add a small download script (e.g., `scripts/get_models.py`) to fetch model files into `models/`
----
+Capture advances its local history only after persistence acknowledges the event. Retrying an event does not create another spin. Stop cancels waits and prevents a restart while an earlier worker is alive. Capture-region settings live in `data/capture_config.json`.
 
-## Screen Capture & OCR
+## Data and verification
 
-This project includes a screen capture component that uses EasyOCR and a configurable region selector to automatically capture roulette numbers shown on a casino screen. Important defaults:
+SQLite schema version 2 enables foreign keys on every connection, cascades session deletion, validates spin values and links predictions only to spins from their own session. `data/roulette_dump.sql` contains the empty schema. The database is created on first use; an older schema requires an explicit reset rather than an implicit migration.
 
-- post_detection_pause: 20 seconds  — wait period after a number is detected before resuming capture (prevents duplicate detections)
-- min_confidence: 0.4  — OCR confidence threshold
-- inactivity_timeout: 60 seconds — if no new number is detected during this time, the system clicks the configured reconnect button
-- reconcile_after_reconnect: true — after reconnect, the system reads a configured history region and reconciles any missing numbers
-- reconcile_count: 5 — max number of history numbers to reconcile
-
-Use `test_capture.py` to interactively configure capture, reconnect and history regions, and the monitor settings.
-
-
-## Project Structure
-
-```
-rl-roulette/
-├── src/
-│   ├── agents/
-│   │   ├── dqn_agent.py       # DQN with BatchNorm architecture
-│   │   ├── fuzzy_adaptive.py  # Fuzzy epsilon controller
-│   │   ├── behavioral.py      # Human behavior simulation agents
-│   │   └── hyper_heuristic.py # RL-based Hyper-Heuristic agent
-│   ├── environment/
-│   │   └── roulette_env.py    # 47-action Gymnasium environment + near-miss variants
-│   ├── database/
-│   │   ├── models.py          # SQLite database layer + predictor stats
-│   │   └── repository.py      # High-level data operations
-│   ├── engine/
-│   │   └── prediction_engine.py # Multi-model prediction coordinator
-│   ├── gui/
-│   │   ├── app.py             # Main GUI application (CustomTkinter)
-│   │   └── components.py      # Reusable GUI components
-│   └── utils/
-│       ├── visualization.py   # Plotting utilities
-│       ├── analysis.py        # Statistical analysis
-│       ├── near_miss.py       # Wheel/table proximity utilities
-│       ├── bias_detection.py  # Wheel bias detection (Chi-square, Wilson CI)
-│       ├── predictor.py       # LSTM, ExtraTrees, DQN predictors
-│       ├── statistics.py      # Advanced stats (O-U test, JSD)
-│       ├── backtesting.py     # Walk-forward validation, Kelly criterion
-│       └── metrics.py         # Anomaly detection, distribution metrics
-├── train.py                   # Training script (DQN/Fuzzy)
-├── train_hh.py               # Training script (Hyper-Heuristic)
-├── test.py                    # Evaluation script
-├── roulette_cli.py           # CLI for data management
-├── roulette_gui.py           # GUI launcher
-├── models/                    # Saved models
-└── docs/                      # Research papers
+```powershell
+python scripts/run_checks.py --profile core
+python scripts/run_checks.py --profile full
+python scripts/verify_runtime.py --device cpu --capture-import
+python scripts/verify_runtime.py --device cuda --capture-import
+python -m pip check
 ```
 
-## Architecture
+Tests use temporary databases and model files. Runtime checks actually fit LSTM/ExtraTrees, train DQN, reload checkpoints and compare the next DQN learning step. They do not validate OCR accuracy against a live site, production capture timing, or predictive advantage on new real observations.
 
-### Environment
+## Sources and earlier work
 
-- **Observation Space**: 
-  - `history`: Last 20 roulette numbers (integers 0-36)
-  - `gain`: Current bankroll / initial bankroll (float)
-- **Action Space**: 47 discrete actions
-  - 0-36: Straight bet on that number (35:1 payout)
-  - 37: Red, 38: Black (1:1 payout)
-  - 39: Odd, 40: Even (1:1 payout)
-  - 41: Low (1-18), 42: High (19-36) (1:1 payout)
-  - 43-45: Dozens (2:1 payout)
-  - 46: PASS (no bet)
+Statistical and implementation references:
 
-### Agent
+- [Agarwal et al., Deep Reinforcement Learning at the Edge of the Statistical Precipice](https://arxiv.org/abs/2108.13264): multiple runs and uncertainty in RL evaluation.
+- [Nixon et al., Measuring Calibration in Deep Learning](https://arxiv.org/abs/1904.01685): calibration definitions and binning choices.
+- [Vaicenavicius et al., Evaluating Model Calibration in Classification](https://proceedings.mlr.press/v89/vaicenavicius19a.html): statistical limits of calibration evaluation.
+- [Small and Tse, Predicting the Outcome of Roulette](https://arxiv.org/abs/1204.6412): physical prediction uses measured wheel/ball dynamics.
+- [SciPy permutation tests](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.permutation_test.html), [false discovery control](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.false_discovery_control.html), [SQLite foreign keys](https://www.sqlite.org/foreignkeys.html), and [PyTorch reproducibility](https://docs.pytorch.org/docs/stable/notes/randomness.html).
 
-```
-Input: history[20] + gain[1]
-  │
-  ├─→ RouletteEmbedding(37 → 64) → Flatten(1280)
-  │     │
-  │     └─→ BatchNormDense(1280 → 128) → BatchNormDense(128 → 128)
-  │
-  └─→ GainNet(1 → 32)
-        │
-        └─→ Concatenate → Dense(160 → 64) → Dense(64 → 47)
-```
-
-Features:
-- **Embedding layer**: Learns representations for each number
-- **BatchNorm**: Stabilizes training without LSTM complexity
-- **Dual input**: History + capital context
-- **Double DQN**: Decouples action selection from evaluation
-
-### Database
-
-SQLite schema:
-- **sessions**: ID, name, source, notes, created_at
-- **spins**: ID, session_id, number, timestamp
-- **predictions**: Predicted vs actual tracking with category breakdown
-- **predictor_stats**: Accuracy per predictor per category per session
-
-## Prediction Engine
-
-The `PredictionEngine` coordinates multiple prediction models:
-
-```python
-from src.engine import PredictionEngine
-
-engine = PredictionEngine(model_path="models/roulette_agent.pt")
-
-# Add historical data
-engine.load_history([17, 23, 0, 5, 32, 14, 9, 22, 18, 7])
-
-# Train models (GPU accelerated)
-engine.train_sync(epochs=50)
-
-# Get predictions from all models
-predictions = engine.predict_all()
-
-# Get consensus prediction (weighted average)
-consensus = engine.get_consensus_prediction()
-print(f"Predicted: {consensus.number.value} ({consensus.number.probability:.1%})")
-print(f"Top 3: {consensus.top_numbers[:3]}")
-```
-
-### Available Predictors
-
-| Predictor | Description | Min History |
-|-----------|-------------|-------------|
-| **LSTM** | Sequence learning neural network (GPU) | 20 spins |
-| **DQN** | Pre-trained reinforcement learning agent | 20 spins |
-| **ExtraTrees** | Ensemble ML from Merchie (2018) thesis | 30 spins |
-| **Bias** | Frequency-based statistical analysis | 50 spins |
-
-## Training Tips
-
-1. **Start with simulated data** to validate the pipeline
-2. **Collect 500+ real spins** before training on real data
-3. **Use lower epsilon decay** (0.998) for more exploration
-4. **Gamma of 0.99** works well for delayed rewards
-
-```bash
-# Recommended training command
-python train.py --episodes 1000 --lr 0.0003 --gamma 0.99 --epsilon-decay 0.998
-```
-
-## Analysis
-
-The CLI provides comprehensive statistical analysis:
-
-```bash
-python roulette_cli.py stats
-```
-
-Outputs:
-- Color distribution (Red/Black/Green percentages)
-- Parity distribution (Odd/Even)
-- Dozen distribution
-- Hot/Cold numbers
-- Chi-square uniformity test
-- Runs test for randomness
-- Streak analysis
-
-## Research Background
-
-Inspired by and implementing techniques from:
-
-### Architecture & Models
-- [FAIRS-Roulette-Player](https://github.com/CTCycle/FAIRS-roulette-player) - BatchNorm architecture
-- [NeuralRoulette-AI](https://github.com/devddine/NeuralRoulette-AI) - LSTM sequence prediction
-- [RLette](https://ucladatares.medium.com/rlette-casino-roulette-through-reinforcement-learning-67e865843f0d) - RL approach
-
-### Academic Papers
-- **Salirrosas (2016)** - "Optimización de la predicción de resultados en la ruleta": 3% probability threshold filter, chi-square sector analysis
-- **Merchie (2018)** - Thesis on casino anomaly detection: Extra Trees classifier, walk-forward backtesting
-- **Li et al. (2024)** - [RL-based Hyper-Heuristics Review](https://pmc.ncbi.nlm.nih.gov/articles/PMC11232579/): Hyper-Heuristic architecture
-- ZCSAR Learning Classifier Systems with R-Learning
-- Reversed Roulette Wheel Selection in evolutionary algorithms
-
-## Hyper-Heuristic Agent 🧬
-
-The Hyper-Heuristic Agent is a meta-level RL approach that learns **which betting strategy to use when**, rather than learning actions directly.
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    High-Level Strategy (HLS)                     │
-│                       Q-Learning Selector                        │
-│                                                                  │
-│  State: [bankroll_level, trend, volatility, llh_perf, bias]     │
-│                            ↓                                     │
-│                    Select Best LLH                               │
-└─────────────────────────────────────────────────────────────────┘
-                             ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                 Low-Level Heuristics (LLH)                       │
-├─────────────┬─────────────┬─────────────┬─────────────┬─────────┤
-│ Hot Numbers │ Cold Numbers│ Sector Bet  │ Martingale  │  Pass   │
-│ Anti-Martin.│ Flat Betting│ Fibonacci   │ D'Alembert  │ Random  │
-└─────────────┴─────────────┴─────────────┴─────────────┴─────────┘
-```
-
-### Available Strategies (LLH)
-
-| Strategy | Description | Risk Level |
-|----------|-------------|------------|
-| HOT_NUMBERS | Bet on frequently occurring numbers | Medium |
-| COLD_NUMBERS | Bet on numbers that haven't appeared | Medium |
-| SECTOR_BETTING | Bet on active wheel sectors | Medium |
-| MARTINGALE | Double bet after loss | High |
-| ANTI_MARTINGALE | Double bet after win | Medium |
-| FLAT_BETTING | Consistent bet amount | Low |
-| FIBONACCI | Fibonacci sequence betting | Medium-High |
-| DALEMBERT | Increase/decrease by 1 unit | Low-Medium |
-| PASS_ACTION | Skip round (risk management) | None |
-| RANDOM_POLICY | Random exploration | Variable |
-
-### Training
-
-```bash
-# Train Q-Learning based Hyper-Heuristic
-python train_hh.py --episodes 1000 --lr 0.1 --gamma 0.95
-
-# Train DQN-based Hyper-Heuristic (neural network)
-python train_hh.py --agent-type dqn --episodes 1000
-
-# With bias detection enabled
-python train_hh.py --episodes 1000 --enable-bias-detection
-
-# Full configuration
-python train_hh.py \
-    --episodes 2000 \
-    --max-steps 500 \
-    --lr 0.1 \
-    --gamma 0.95 \
-    --epsilon-start 1.0 \
-    --epsilon-end 0.05 \
-    --initial-bankroll 1000 \
-    --base-bet 10 \
-    --enable-bias-detection \
-    --use-near-miss \
-    --verbose 2
-```
-
-### Usage Example
-
-```python
-from src.agents import HyperHeuristicAgent, LLHType
-from src.environment import RouletteEnv
-
-# Create agent
-agent = HyperHeuristicAgent(
-    learning_rate=0.1,
-    discount_factor=0.95,
-    initial_bankroll=1000.0,
-    base_bet=10.0
-)
-
-# Training loop
-env = RouletteEnv()
-obs, info = env.reset()
-
-for episode in range(1000):
-    agent.reset_episode()
-    
-    for step in range(500):
-        # Agent selects which strategy to use
-        agent.select_llh(explore=True)
-        
-        # Strategy selects specific action
-        action, bet_amount = agent.select_action()
-        
-        # Execute in environment
-        obs, reward, done, truncated, info = env.step(action)
-        
-        # Agent learns from outcome
-        outcome = info.get('winning_number', 0)
-        agent.update(outcome, action, reward)
-        
-        if done:
-            break
-
-# Check statistics
-print(agent.get_statistics())
-```
-
-## Important Note
-
-⚠️ **This is an educational project.** Roulette is a game with negative expected value - the house always wins in the long run. No AI can overcome the mathematical house edge. This project explores RL techniques, not gambling strategies.
-
-## Screenshots
-
-### GUI Application
-The modern CustomTkinter interface shows:
-- Real-time predictions with confidence percentages
-- Category probability bars (Color, Parity, High/Low, Dozen, Column)
-- Top-10 predicted numbers with roulette colors
-- Predictor accuracy comparison table
+Earlier repository influences include [FAIRS-Roulette-Player](https://github.com/CTCycle/FAIRS-roulette-player), [NeuralRoulette-AI](https://github.com/devddine/NeuralRoulette-AI), and the [review of RL-based hyper-heuristics](https://pmc.ncbi.nlm.nih.gov/articles/PMC11232579/). These references motivate experiments; they do not validate this application's forecasts.
 
 ## License
 

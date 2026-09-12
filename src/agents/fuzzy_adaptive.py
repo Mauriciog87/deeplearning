@@ -732,6 +732,7 @@ class FuzzyAdaptiveDQN:
         
         # Disable agent's built-in epsilon decay
         self.agent.epsilon_decay = 1.0
+        self.agent.config['epsilon_decay'] = 1.0
     
     def act(
         self, 
@@ -750,7 +751,8 @@ class FuzzyAdaptiveDQN:
         q_values = self.agent.get_q_values(history, gain) if training else None
         
         # Sync epsilon
-        self.agent.epsilon = self.fuzzy_controller.get_epsilon()
+        if training:
+            self.agent.epsilon = self.fuzzy_controller.get_epsilon()
         
         # Get action from base agent
         action = self.agent.act(history, gain, training, action_mask)
@@ -766,11 +768,13 @@ class FuzzyAdaptiveDQN:
         next_history: np.ndarray,
         next_gain: float,
         done: bool,
-        q_values: Optional[np.ndarray] = None
+        q_values: Optional[np.ndarray] = None,
+        *, next_action_mask=None, truncated: bool = False
     ):
         """Store transition and update fuzzy controller."""
         # Store in base agent's memory
-        self.agent.remember(history, gain, action, reward, next_history, next_gain, done)
+        self.agent.remember(history, gain, action, reward, next_history, next_gain, done,
+                            next_action_mask=next_action_mask, truncated=truncated)
         
         # Update fuzzy controller
         self.fuzzy_controller.update(action, reward, q_values)
@@ -800,9 +804,15 @@ class FuzzyAdaptiveDQN:
     def save(self, path: str, extra_data: dict = None):
         """Save agent and fuzzy state."""
         fuzzy_data = {
-            'fuzzy_epsilon': self.fuzzy_controller.epsilon,
-            'fuzzy_epsilon_history': self.fuzzy_controller.epsilon_history,
-            'fuzzy_update_count': self.fuzzy_controller.update_count
+            'fuzzy_state': {
+                'step_count': self.step_count,
+                'update_frequency': self.update_frequency,
+                'controller': {name: getattr(self.fuzzy_controller, name) for name in (
+                    'action_size', 'epsilon_min', 'epsilon_max', 'adjustment_rate',
+                    'epsilon', 'update_count', 'epsilon_history')},
+                'estimators': {name: vars(getattr(self.fuzzy_controller, name)) for name in (
+                    'quality_estimator', 'success_estimator', 'trend_analyzer', 'diversity_estimator')}
+            }
         }
         if extra_data:
             fuzzy_data.update(extra_data)
@@ -811,9 +821,26 @@ class FuzzyAdaptiveDQN:
     def load(self, path: str) -> dict:
         """Load agent and fuzzy state."""
         checkpoint = self.agent.load(path)
-        if 'fuzzy_epsilon' in checkpoint:
-            self.fuzzy_controller.epsilon = checkpoint['fuzzy_epsilon']
-            self.agent.epsilon = self.fuzzy_controller.epsilon
+        if 'fuzzy_state' not in checkpoint:
+            raise ValueError('Checkpoint does not contain a fuzzy controller')
+        state = checkpoint['fuzzy_state']
+        self.step_count = state['step_count']
+        self.update_frequency = state['update_frequency']
+        for name, value in state['controller'].items():
+            setattr(self.fuzzy_controller, name, value)
+        def restore_like(current, value):
+            if isinstance(current, deque):
+                return deque(value, maxlen=current.maxlen)
+            if isinstance(current, np.ndarray):
+                return np.asarray(value, dtype=current.dtype)
+            if isinstance(current, dict):
+                return {key: restore_like(current[key], item) for key, item in value.items()}
+            return value
+        for name, attributes in state['estimators'].items():
+            estimator = getattr(self.fuzzy_controller, name)
+            for key, value in attributes.items():
+                setattr(estimator, key, restore_like(getattr(estimator, key), value))
+        self.agent.epsilon = self.fuzzy_controller.epsilon
         return checkpoint
     
     # Delegate other properties to base agent

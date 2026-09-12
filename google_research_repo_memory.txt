@@ -1,0 +1,805 @@
+Google Research repository memory for rl-roulette
+Generated: 2026-06-16T19:07:08.668900+00:00
+Organization: https://github.com/google-research
+
+Local fit context:
+The local project predicts European roulette outcomes from a 0-36 history using LSTM, DQN, ExtraTrees, BiasAware, consensus, and simple baselines. Useful imports should improve derived time-series analysis, anomaly detection, heatmaps, probability calibration, RL strategy selection, or walk-forward evaluation.
+
+Scoring:
+0-3 low relevance, 4-4.9 weak, 5-6.4 watch, 6.5-7.9 promising, 8-10 strong.
+Scores are first-pass metadata/readme signals, not proof of ROI.
+
+Curated second-pass findings from parallel agent review:
+The live GitHub inventory had 348 public repositories on 2026-06-16. With per_page=100, only pages 1-4 had content. Pages 5-12 were checked conceptually from pagination and are empty unless the organization adds more repositories later.
+
+Use this curated section before the automatic ranked inventory below. The automatic scores are useful for search, but they overvalue generic RL, sequence, or benchmark keywords that do not necessarily transfer to roulette.
+
+Highest-value candidates for rl-roulette:
+
+1. google-research/rliable
+URL: https://github.com/google-research/rliable
+Curated score: 9.2
+Category: evaluation and statistical confidence
+Why it matters: The local project already has walk-forward evaluation, top-k, ROI, log-loss, Brier, and calibration metrics. rliable is directly useful for robust aggregate metrics, bootstrap confidence intervals, interquartile mean, and probability of improvement across folds/runs.
+Integration path: Start by copying the evaluation ideas, not the whole package. Add confidence intervals and paired model comparison around existing ModelEvaluationSummary outputs.
+Acceptance test: The report should show CIs for top-k hit rate, ROI, Brier/log-loss, and probability that a candidate beats fair or rolling_frequency across folds.
+Risk: Evaluation rigor may reveal that no predictor has signal. That is a good outcome and should not be hidden.
+
+2. google-research/robustness_metrics
+URL: https://github.com/google-research/robustness_metrics
+Curated score: 8.8
+Category: calibration, uncertainty, OOD diagnostics
+Why it matters: The local engine emits probability distributions over 37 numbers. Calibration and uncertainty checks are more relevant than raw hit rate.
+Integration path: Add reliability diagrams, ECE/MCE variants, negative log-likelihood summaries, confidence bucket analysis, and maybe OOD/stability checks by session or time window.
+Acceptance test: Existing predictors should have per-model calibration diagnostics and confidence buckets that can expose overconfident false positives.
+Risk: Dependencies may be heavier than needed. Prefer lightweight local implementations of the metrics first.
+
+3. google-research/rl-reliability-metrics
+URL: https://github.com/google-research/rl-reliability-metrics
+Curated score: 8.5
+Category: RL evaluation reliability
+Why it matters: The repo has DQN and strategy evaluation. RL results are noisy and easy to overfit to a backtest.
+Integration path: Borrow reliability concepts for repeated training/evaluation runs, seed variance, stability, drawdown, and bootstrap comparisons.
+Acceptance test: DQN or future policy changes should be accepted only if they improve probabilistic and profit metrics with uncertainty bounds across repeated runs.
+Risk: Some metrics may be overkill until the project has enough independent sessions.
+
+4. google-research/spade_anomaly_detection
+URL: https://github.com/google-research/spade_anomaly_detection
+Curated score: 8.2
+Category: anomaly detection
+Why it matters: For roulette, anomaly/bias detection is more defensible than direct prediction. This aligns with BiasAwarePredictor and future heatmaps.
+Integration path: Treat as inspiration for a dedicated anomaly track: detect abnormal windows by number, sector, dozen, column, color, parity, entropy, and chi-square residuals.
+Acceptance test: On synthetic biased wheels, the anomaly module should flag injected drift earlier than simple chi-square without raising many false alarms on shuffled fair data.
+Risk: Avoid training on future data or tuning anomaly thresholds on the test window.
+
+5. google-research/timesfm
+URL: https://github.com/google-research/timesfm
+Curated score: 8.0
+Category: future time-series forecasting
+Why it matters: Useful once the SQLite DB has many well-labeled spins and metadata. It should forecast derived temporal features, not raw roulette numbers as continuous values.
+Integration path: Optional lazy-loaded experimental predictor over rolling features: number frequencies, sector heat, entropy, deviation from fair probability, color/parity/dozen/column rates, and metadata covariates if available.
+Acceptance test: Must beat fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k before enabling anywhere normal.
+Risk: Heavy dependency and checkpoint download. The most likely useful output is analysis/heatmaps/anomaly priors, not next-number prediction.
+
+6. google-research/soft-dtw-divergences
+URL: https://github.com/google-research/soft-dtw-divergences
+Curated score: 7.8
+Category: drift and window similarity
+Why it matters: Comparing rolling windows of derived distributions can identify regime changes or cluster similar sessions.
+Integration path: Build features per window and compare windows/sessions with soft-DTW-like distances. Use results for drift dashboards and anomaly context.
+Acceptance test: Synthetic shifted windows should separate from shuffled fair windows more reliably than simple Euclidean distance on raw counts.
+Risk: Continuous time-series assumptions need care; roulette numbers should be encoded as categorical distributions or wheel-sector features.
+
+7. google-research/dice_rl and google-research/deep_ope
+URLs: https://github.com/google-research/dice_rl and https://github.com/google-research/deep_ope
+Curated score: 7.6
+Category: off-policy evaluation
+Why it matters: Backtesting betting policies can be biased if policies are selected retrospectively. OPE concepts help evaluate policies without fooling ourselves.
+Integration path: Use as conceptual input for policy evaluation and train/test protocol design. Full import is probably unnecessary.
+Acceptance test: New betting policies should be evaluated with strict walk-forward, fixed policy selection rules, and null/permutation baselines.
+Risk: Real casino outcomes are not generated by our logging policy in the same way recommender/RL datasets are, so apply concepts cautiously.
+
+8. google-research/gpax, google-research/hyperbo, google-research/optformer
+URLs: https://github.com/google-research/gpax, https://github.com/google-research/hyperbo, https://github.com/google-research/optformer
+Curated score: 7.2
+Category: uncertainty and hyperparameter optimization
+Why it matters: These can help tune LSTM/DQN/ExtraTrees/BiasAware and quantify uncertainty, but they are not direct roulette predictors.
+Integration path: Defer until the evaluation harness has confidence intervals. Then use Bayesian optimization ideas for hyperparameters and ensemble weights.
+Acceptance test: HPO must be nested inside walk-forward or use held-out validation to avoid picking lucky parameters.
+Risk: JAX stacks and black-box HPO can increase complexity and overfitting.
+
+9. google-research/weatherbenchX and google-research/weatherbench2
+URLs: https://github.com/google-research/weatherbenchX and https://github.com/google-research/weatherbench2
+Curated score: 7.0
+Category: forecast evaluation architecture
+Why it matters: Useful as architecture inspiration for reproducible forecast evaluation, aggregation, and metrics, especially if the project grows into many datasets/sessions.
+Integration path: Borrow structure for result aggregation and benchmark reports. Do not import weather-specific code.
+Acceptance test: The roulette evaluation harness should support repeatable folds, model ordering, summary tables, and persisted per-row predictions.
+Risk: Domain mismatch is high; keep this as design inspiration.
+
+10. google-research/unique-randomizer
+URL: https://github.com/google-research/unique-randomizer
+Curated score: 6.8
+Category: discrete candidate sampling
+Why it matters: Could help sample unique top-k candidates from model distributions without replacement.
+Integration path: Only consider if the project needs stochastic candidate generation from calibrated probabilities. A small local sampler may be enough.
+Acceptance test: Sampling should preserve model probabilities while avoiding duplicate candidates and should not improve metrics by accidental leakage.
+Risk: Low core value unless top-k candidate diversity becomes a real problem.
+
+Useful but lower-priority references:
+- google-research/flood-forecasting: sequence forecasting and walk-forward patterns; good inspiration, not direct roulette code.
+- google-research/zapbench: forecasting benchmark patterns; useful for notebooks/evaluation design.
+- google-research/discs: discrete sampling and MCMC concepts for 0-36 distributions.
+- google-research/deep_representation_one_class: one-class anomaly detection ideas.
+- google-research/fast-soft-sort: differentiable ranking/top-k ideas if training custom neural ranking losses.
+- google-research/long-range-arena, perceiver-ar, meliad, t5x: long-context sequence modeling ideas, but likely too heavy for this repo now.
+
+Recommended implementation order:
+1. Strengthen evaluation first: rliable-style CIs, robustness_metrics-style calibration, and RL reliability summaries.
+2. Expand heatmap UX only when needed: inline image previews, richer anomaly tests, and rolling drift comparisons.
+3. Add better experiment discipline: fixed walk-forward protocols, permutation/null tests, and no retrospective strategy selection.
+4. Only then prototype optional TimesFM over derived features when the DB has enough labeled spins and metadata.
+5. Keep all large external research stacks optional and lazy-loaded. Prefer reimplementing small metric ideas locally over adding heavy dependencies.
+
+Implementation status after 2026-06-16 pass:
+Implemented now:
+- Added bootstrap confidence intervals to the local walk-forward evaluation summary.
+- Added calibration bins per model, complementing existing ECE.
+- Added paired model-vs-fair comparisons with improvement deltas and probability of improvement.
+- Added CLI PNG heatmaps for table residuals, wheel sectors, rolling number residuals, and rolling category residuals.
+- Added anomaly summaries over numbers, table categories, and wheel sectors with configurable z-score thresholds.
+- Added session drift heatmaps over encoded distributions and a basic GUI action that generates per-session heatmap reports.
+- Kept the implementation dependency-free, local, and compatible with existing evaluate_walk_forward callers.
+
+Deep dive decisions:
+- rliable: implement ideas locally now. Confidence intervals and paired comparisons are the correct first step.
+- robustness_metrics: implement lightweight calibration buckets now. Reliability diagrams and OOD/session stability can come later.
+- rl-reliability-metrics: partially implemented now through repeated-row summaries and uncertainty bounds. Repeated training seed studies remain future work.
+- spade_anomaly_detection: lightweight anomaly alerts over derived categorical/sector features are implemented. Future work is richer entropy, chi-square, and metadata-aware alerting.
+- timesfm: future optional experiment only after more labeled data. Use derived features and covariates, not raw 0-36 sequences as continuous values.
+- soft-dtw-divergences: first session drift similarity over encoded distributions is implemented. Future work is rolling-window soft-DTW-style comparisons.
+- dice_rl and deep_ope: future evaluation discipline if policy selection gets more complex; do not import now.
+- gpax, hyperbo, optformer: future HPO/uncertainty ideas after the current harness is stable.
+- weatherbenchX/weatherbench2: design inspiration only for benchmark organization.
+- unique-randomizer: future local sampling helper only if stochastic top-k candidate diversity becomes a real need.
+
+Inventory summary:
+Repositories scanned: 348
+Page counts: p1=100, p2=100, p3=100, p4=48
+
+Second-pass shortlist:
+
+1. google-research/timesfm | score=10.0 | fit=strong
+URL: https://github.com/google-research/timesfm
+Description: TimesFM (Time Series Foundation Model) is a pretrained time-series foundation model developed by Google Research for time-series forecasting.
+Language: Python | stars=20958 | updated=2026-06-16 | archived=False
+Positive signals: time series, forecast, forecasting
+Negative signals: none
+Potential integration: Candidate for derived temporal features, rolling heatmaps, anomaly intervals, or forecast-based priors.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # TimesFM TimesFM (Time Series Foundation Model) is a pretrained time-series foundation model developed by Google Research for time-series forecasting. *   Paper: [A decoder-only foundation model for time-series forecasting](https://arxiv.org/abs/2310.10688), ICML 2024. *   All checkpoints: [TimesFM Hugging Face Collection](https://huggingface.co/collections/google/timesfm-release-66e4be5fdb56e960c1e482a6).
+
+2. google-research/rliable | score=10.0 | fit=strong
+URL: https://github.com/google-research/rliable
+Description: [NeurIPS'21 Outstanding Paper] Library for reliable evaluation on RL and ML benchmarks, even with only a handful of seeds.
+Language: Jupyter Notebook | stars=871 | updated=2026-06-10 | archived=True
+Positive signals: reinforcement, rl, evaluation, benchmark, metrics
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1a0pSD-1tWhMmeJeeoyZM1A-HCW3yf1xR?usp=sharing) [![Website](https://img.shields.io/badge/www-Website-green)](https://agarwl.github.io/rliab... `rliable` is an open-source Python library for reliable evaluation, even with a *handful of runs*, on reinforcement learning and machine learnings benchmarks. | **Desideratum** | **Current evaluation approach** |  **Our Recommendation**    | | --------------------------------- | ----------- | --------- | | Uncertainty in aggregate performance | **Point estimates**: <ul> <li> Ignore statistical uncertainty </li> <li> Hinder *results reproducibility* </li></ul> | Interval estimates using **stratified bootstrap confidence intervals** (CIs) | |Performance variability across tasks and runs| **Tables with task mean scores**: <ul><li> Overwhelming beyond a few tasks </li> <li> Standard deviations frequently omitted </li> <li> Incomplete picture for multimodal and heavy-tailed distributions </li> </... |Aggregate metrics for summarizing benchmark performance | **Mean**:  <ul><li> Often dominated by performance on outlier tasks </li></ul> &nbsp; **Median**: <ul> <li> Statistically inefficient (requires a large number of runs to claim improvements) </li>  <...
+
+3. google-research/flood-forecasting | score=10.0 | fit=strong
+URL: https://github.com/google-research/flood-forecasting
+Description: No description
+Language: Python | stars=268 | updated=2026-06-16 | archived=False
+Positive signals: forecast, forecasting
+Negative signals: none
+Potential integration: Candidate for derived temporal features, rolling heatmaps, anomaly intervals, or forecast-based priors.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # **OpenHydroNet: Riverine Flood Forecasting** ## **🌊 This repository implements the state-of-the-art models that power [Google FloodHub](https://sites.research.google/floods/).** This is not an officially supported Google product. This project is not eligible for the Google Open Source Software Vulnerability Rewards Program. The repository provides open-source replication of Google’s global flood-forecasting models. By open-sourcing these models, we aim to foster transparency, enable in-house integration in production systems, and accelerate academic research. This repository is a fork of [NeuralHydrology](https://github.com/neuralhydrology/neuralhydrology), which has been heavily modified and extended to support forecast sequences using the specific model architectures that are used operationally in the Google F... ## 📖 Documentation Detailed instructions on how to configure, train, and evaluate OpenHydroNet models can be found on our official documentation page: 👉 **[openhydronet.readthedocs.io](https://openhydronet.readthedocs.io/)**
+
+4. google-research/rl-reliability-metrics | score=10.0 | fit=strong
+URL: https://github.com/google-research/rl-reliability-metrics
+Description: The RL Reliability Metrics library provides a set of metrics for measuring the reliability of reinforcement learning (RL) algorithms, as well as statistical tools for comparing algorithms and for computing confidence intervals on these metrics.
+Language: Python | stars=162 | updated=2026-05-11 | archived=True
+Positive signals: statistical, reinforcement, rl, metrics
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # RL Reliability Metrics The RL Reliability Metrics library provides a set of metrics for measuring the reliability of reinforcement learning (RL) algorithms. The library also provides statistical tools for computing confidence intervals and for comparing algorithms on these metrics. As input, this library accepts a set of RL training curves, or a set of rollouts of an already trained RL algorithm. The library computes reliability metrics across different dimensions (additionally, it can also analyze non-reliability
+
+5. google-research/recsim_ng | score=10.0 | fit=strong
+URL: https://github.com/google-research/recsim_ng
+Description: RecSim NG: Toward Principled Uncertainty Modeling for Recommender Ecosystems
+Language: Jupyter Notebook | stars=127 | updated=2026-06-11 | archived=True
+Positive signals: probabilistic, uncertainty, reinforcement, simulation
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # RecSim NG: Toward Principled Uncertainty Modeling for Recommender Ecosystems RecSim NG, a probabilistic platform for multi-agent recommender systems simulation. RecSimNG is a scalable, modular, differentiable simulator implemented in Edward2 and TensorFlow. It offers: a powerful, general probabilistic programming language for agent-behavior specification; an XLA-based vectorized execution model for running simulations on accelerated hardware; and tools for probabilistic inference and latent-variable model learning, backed by automatic differentiation and tracing. We describe RecSim NG
+
+6. google-research/zapbench | score=10.0 | fit=strong
+URL: https://github.com/google-research/zapbench
+Description: The Zebrafish Activity Prediction Benchmark measures progress on the problem of predicting cellular-resolution neural activity throughout an entire vertebrate brain.
+Language: Python | stars=76 | updated=2026-06-08 | archived=False
+Positive signals: time series, forecast, forecasting, benchmark
+Negative signals: none
+Potential integration: Candidate for derived temporal features, rolling heatmaps, anomaly intervals, or forecast-based priors.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # ZAPBench ⚡ The Zebrafish Activity Prediction Benchmark (ZAPBench) measures progress on the problem of predicting cellular-resolution neural activity throughout an entire vertebrate brain. For more information, refer to [our ICLR paper](https://openreview.net/pdf?id=oCHsDpyawq) and the [companion website](https://google-research.github.io/zapbench). ## Getting started To get started with ZAPBench, we provide tutorial-style notebooks in the `colabs/` directory: - **Datasets:** Overview of various datasets we released and how to access them. [![](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google-research/zapbench/blob/main/colabs/datasets.ipynb) - **Training and evaluation:** How to train and evaluate forecasting methods on ZAPBench in a framework agnostic way. [![](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google-research/zapbench/blob/main...
+
+7. google-research/spade_anomaly_detection | score=10.0 | fit=strong
+URL: https://github.com/google-research/spade_anomaly_detection
+Description: Semi-supervised anomaly detection method
+Language: Python | stars=53 | updated=2026-06-12 | archived=False
+Positive signals: anomaly, detect, detection, classification
+Negative signals: none
+Potential integration: Candidate for supervised tabular features if enough labeled spins and session metadata exist.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # spade_anomaly_detection ![GitHub search hit counter](https://img.shields.io/github/search/google-research/spade_anomaly_detection/Anomaly%20Detection) *This is not an officially supported Google product.* **TMLR Paper**: "SPADE: Semi-supervised Anomaly Detection under Distribution Mismatch", Jinsung Yoon and Kihyuk Sohn and Chun-Liang Li and Sercan O Arik and Tomas Pfister, *Transactions on Machine Learning Research*, ISSN:2835-8856, 2023, [link](https://ope... **Google Research Blog Post**: [Link](https://ai.googleblog.com/2023/02/unsupervised-and-semi-supervised.html) **Google Open Source Blog Post**: [Link](https://opensource.googleblog.com/2024/05/semi-supervised-anomaly-detection-under-distribution-mismatch.html) ## Introduction [Semi-supervised Pseudo Labeler Anomaly Detection with Ensembling (SPADE)](https://openreview.net/forum?id=JwDpZSv3yz)  is a semi-supervised anomaly detection method that uses an ensemble of one class classifiers as the pseudo-labelers and supervised classi...
+
+8. google-research/android_world | score=8.8 | fit=strong
+URL: https://github.com/google-research/android_world
+Description: AndroidWorld is an environment and benchmark for autonomous agents
+Language: Python | stars=796 | updated=2026-06-15 | archived=False
+Positive signals: rl, benchmark
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # AndroidWorld <p align="center"> <a href="https://google-research.github.io/android_world/">Website</a> • <a href="https://arxiv.org/pdf/2405.14573">Paper</a> • <a href="https://google-research.github.io/android_world/task_list.html">Tasks</a> • <a href="https://docs.google.com/spreadsheets/d/1cchzP9dlTZ3WXQTfYNhh3avxoLipqHN75v1Tb86uhHo/edit?gid=0#gid=0">Leaderboard</a> </p> ![Overview](assets/overview.png)
+
+9. google-research/robopianist | score=8.8 | fit=strong
+URL: https://github.com/google-research/robopianist
+Description: [CoRL '23] Dexterous piano playing with deep reinforcement learning.
+Language: Python | stars=733 | updated=2026-06-16 | archived=True
+Positive signals: reinforcement, rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # RoboPianist: Dexterous Piano Playing with Deep Reinforcement Learning [tests-badge]: https://github.com/google-research/robopianist/actions/workflows/ci.yml/badge.svg [docs-badge]: https://github.com/google-research/robopianist/actions/workflows/docs.yml/badge.svg [tests]: https://github.com/google-research/robopianist/actions/workflows/ci.yml [docs]: https://google-research.github.io/robopianist/ [pypi-versions-badge]: https://img.shields.io/pypi/pyversions/robopianist [pypi-badge]: https://badge.fury.io/py/robopianist.svg [pypi]: https://pypi.org/project/robopianist/
+
+10. google-research/batch_rl | score=8.8 | fit=strong
+URL: https://github.com/google-research/batch_rl
+Description: Offline Reinforcement Learning (aka Batch Reinforcement Learning) on Atari 2600 games
+Language: Python | stars=559 | updated=2026-05-28 | archived=True
+Positive signals: reinforcement, rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1ktlNni_vwFpFtCgUez-RHW0OdGc2U_Wv?usp=sharing) [![Website](https://img.shields.io/badge/www-Website-green)](https://offline-rl.github.io) ... # An Optimistic Perspective on Offline Reinforcement Learning (ICML, 2020) This project provides the open source implementation using the [Dopamine][dopamine] framework for running experiments mentioned in [An Optimistic Perspective on Offline Reinforcement Learning][paper]. In this work, we use the logged experiences of a DQN agent for training off-policy agents (shown below) in an offline setting (*i.e.*, [batch RL][batch_rl]) without any new interaction with the environment during training. Refer to [offline-rl.github.io][project_page] for the project page.
+
+11. google-research/ibc | score=8.8 | fit=strong
+URL: https://github.com/google-research/ibc
+Description: Official implementation of Implicit Behavioral Cloning, as described in our CoRL 2021 paper, see more at https://implicitbc.github.io/
+Language: Python | stars=379 | updated=2026-05-20 | archived=True
+Positive signals: reinforcement, rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Implicit Behavioral Cloning This codebase contains the official implementation of the *Implicit Behavioral Cloning (IBC)* algorithm from our paper: **Implicit Behavioral Cloning [(website link)](https://implicitbc.github.io/)  [(arXiv link)](https://arxiv.org/abs/2109.00137)** </br> *Pete Florence, Corey Lynch, Andy Zeng, Oscar Ramirez, Ayzaan Wahid, Laura Downs, Adrian Wong, Johnny Lee, Igor Mordatch, Jonathan Tompson* </br> Conference on Robot Learning (CoRL) 2021 ![](./docs/insert.gif)  |  ![](./docs/sort.gif) :-------------------------:|:-------------------------:| <img src="docs/energy_pop_teaser.png"/>
+
+12. google-research/reincarnating_rl | score=8.6 | fit=strong
+URL: https://github.com/google-research/reincarnating_rl
+Description: [NeurIPS 2022] Open source code for reusing prior computational work in RL.
+Language: Python | stars=100 | updated=2026-06-10 | archived=True
+Positive signals: reinforcement, rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1ktlNni_vwFpFtCgUez-RHW0OdGc2U_Wv?usp=sharing) [![Website](https://img.shields.io/badge/www-Website-green)](https://agarwl.github.io/reinc... # Reincarnating Reinforcement Learning: Reusing Prior Computation to Accelerate Progress ## [(External Replication) Working implementation in CleanRL](https://github.com/vwxyzjn/cleanrl/pull/344) <p class="cover" align="center"> <img src="RRL.gif" width="80%" /> </p> This codebase provides the open source implementation using the [Dopamine][dopamine] framework for running Atari experiments in [Reincarnating RL][paper]. In this work, we leverage the policy from an existing agent (e.g., DQN trained for 400M environment frames) to
+
+13. google-research/weatherbenchX | score=8.3 | fit=strong
+URL: https://github.com/google-research/weatherbenchX
+Description: A modular framework for evaluating weather forecasts
+Language: Python | stars=223 | updated=2026-06-16 | archived=False
+Positive signals: forecast
+Negative signals: none
+Potential integration: Candidate for derived temporal features, rolling heatmaps, anomaly intervals, or forecast-based priors.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: ![logo](logos/wbx-logo-wide.png) # WeatherBench-X: A modular framework for evaluating weather forecasts ## Why WeatherBench-X? WeatherBench-X is an evaluation framework that enables flexible evaluation of various kinds of forecast and ground truth data, including sparse datasets like those coming from weather stations or satellites. It is the successor to the [WeatherBench 2 evalua... WeatherBench related datasets can be found [here](https://weatherbench2.readthedocs.io/en/latest/data-guide.html). The core design principles behind WeatherBench-X are: - Modularity: Data loaders, Interpolations, Metrics and the Aggregation can be defined through interoperable classes. - Xarray: All internal logic is based on xarray DataArrays.
+
+14. google-research/swirl-dynamics | score=8.1 | fit=strong
+URL: https://github.com/google-research/swirl-dynamics
+Description: Swirl-Dynamics is a python repository that provides implementations of models, benchmarks and utilities for dynamical systems.
+Language: Jupyter Notebook | stars=81 | updated=2026-04-11 | archived=False
+Positive signals: rl, benchmark
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Swirl-Dynamics *This is not an official Google product* Swirl-Dynamics is a python repository that provides implementations of models, benchmarks and utilities for dynamical systems.
+
+15. google-research/football | score=7.8 | fit=promising
+URL: https://github.com/google-research/football
+Description: Check out the new game server:
+Language: Python | stars=3619 | updated=2026-06-16 | archived=False
+Positive signals: reinforcement
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Google Research Football This repository contains an RL environment based on open-source game Gameplay Football. <br> It was created by the Google Brain team for research purposes. Useful links: * [Run in Colab](https://colab.research.google.com/github/google-research/football/blob/master/gfootball/colabs/gfootball_example_from_prebuild.ipynb) - start training in less that 2 minutes. * [Google Research Football Paper](https://arxiv.org/abs/1907.11180) * [GoogleAI blog post](https://ai.googleblog.com/2019/06/introducing-google-research-football.html) * [Google Research Football on Cloud](https://towardsdatascience.com/reproducing-google-research-football-rl-results-ac75cf17190e)
+
+16. google-research/recsim | score=7.8 | fit=promising
+URL: https://github.com/google-research/recsim
+Description:  A Configurable Recommender Systems Simulation Platform
+Language: Python | stars=786 | updated=2026-06-11 | archived=True
+Positive signals: reinforcement, simulation
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # RecSim: A Configurable Recommender Systems Simulation Platform RecSim is a configurable platform for authoring simulation environments for recommender systems (RSs) that naturally supports **sequential interaction** with users. RecSim allows the creation of new environments that reflect particular aspects of user behavior and item structure at a level of abstraction well-suited to pushing the limits of current reinforcement learning (RL) and RS techniques in sequential interactive recommendation problems. Environments can be easily configured that vary assumptions about: user preferences and item
+
+17. google-research/augmix | score=7.3 | fit=promising
+URL: https://github.com/google-research/augmix
+Description: AugMix: A Simple Data Processing Method to Improve Robustness and Uncertainty
+Language: Python | stars=991 | updated=2026-06-05 | archived=False
+Positive signals: uncertainty
+Negative signals: none
+Potential integration: Candidate for probability calibration, uncertainty-aware predictions, or confidence diagnostics.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # AugMix <img align="center" src="assets/augmix.gif" width="750"> ## Introduction We propose AugMix, a data processing technique that mixes augmented images and enforces consistent embeddings of the augmented images, which results in increased robustness and improved uncertainty calibration. AugMix does not require tuning to work correctly, as with random cropping or CutOut, and thus enables plug-and-play data augmentation. AugMix significantly improves
+
+18. google-research/look-back-when-surprised | score=7.2 | fit=promising
+URL: https://github.com/google-research/look-back-when-surprised
+Description: Look Back When Surprised: Stabilizing Reverse Experience Replay for Neural Approximation
+Language: Python | stars=15 | updated=2026-06-08 | archived=False
+Positive signals: reinforcement
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Look Back When Surprised: RER++ This repository serves to open-source the code used in the paper: "[Look Back When Surprised: Stabilizing Reverse Experience Replay for Neural Approximation](https://arxiv.org/abs/2206.03171)". ### Getting started To avoid any conflict with your existing Python setup, it is suggested to work in a virtual environment with [`virtualenv`](https://docs.python-guide.org/dev/virtualenvs/). To install `virtualenv`: ```bash pip install --upgrade virtualenv ``` Create a virtual environment, activate it and install the requirements in [`requirements.txt`](requirements.txt).
+
+19. google-research/realworldrl_suite | score=6.8 | fit=promising
+URL: https://github.com/google-research/realworldrl_suite
+Description: Real-World RL Benchmark Suite
+Language: Python | stars=365 | updated=2026-05-29 | archived=True
+Positive signals: rl, benchmark
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Real-World Reinforcement Learning (RWRL) Challenge Framework <p align="center"> <img src="docs/img/angular_velocity.gif" height="150px"/><img src="docs/img/humanoid_perturbations.gif" height="150px"> </p> The ["Challenges of Real-World RL"](https://arxiv.org/abs/1904.12901) paper identifies and describes a set of nine challenges that are currently preventing Reinforcement Learning (RL) agents from being utilized on real-world applications and products. It also describes an evaluation framework and a set
+
+20. google-research/dads | score=6.7 | fit=promising
+URL: https://github.com/google-research/dads
+Description: Code for 'Dynamics-Aware Unsupervised Discovery of Skills' (DADS). Enables skill discovery without supervision, which can be combined with model-based control. 
+Language: Python | stars=198 | updated=2026-05-11 | archived=True
+Positive signals: reinforcement, rl
+Negative signals: vision
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Dynamics-Aware Discovery of Skills (DADS) This repository is the open-source implementation of Dynamics-Aware Unsupervised Discovery of Skills ([project page][website], [arXiv][paper]). We propose an skill-discovery method which can learn skills for different agents without any rewards, while simul... We have also included an improved off-policy version of DADS, coined off-DADS. The details have been released in [Emergent Real-World Robotic Skills via Unsupervised Off-Policy Reinforcement Learning][rss_arxiv]. In case of problems, contact Archit Sharma. ## Table of Contents * [Setup](#setup) * [Usage](#usage) * [Citation](#citation)
+
+21. google-research/dice_rl | score=6.6 | fit=promising
+URL: https://github.com/google-research/dice_rl
+Description: No description
+Language: Python | stars=114 | updated=2026-05-07 | archived=False
+Positive signals: rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # DICE: The DIstribution Correction Estimation Library This library unifies the distribution correction estimation algorithms for off-policy evaluation, including: * [DualDICE: Behavior-Agnostic Estimation of Discounted Stationary Distribution Corrections](https://arxiv.org/abs/1906.04733) * [GenDICE: Generalized Offline Estimation of Stationary Values](https://arxiv.org/abs/2002.09072) * [Reinforcement Learning via Fenchel-Rockafellar Duality](https://arxiv.org/abs/2001.01866) Please cite these work accordingly upon using this library. ## Summary Existing DICE algorithms are the results of particular regularization choices in the Lagrangian of the Q-LP and d-LP policy values.
+
+22. google-research/hyperbo | score=6.6 | fit=promising
+URL: https://github.com/google-research/hyperbo
+Description: Pre-trained Gaussian processes for Bayesian optimization
+Language: Python | stars=103 | updated=2026-04-01 | archived=False
+Positive signals: bayesian
+Negative signals: none
+Potential integration: Candidate for probability calibration, uncertainty-aware predictions, or confidence diagnostics.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # HyperBO - Prior Discovery A Jax/Flax codebase for the algorithm in HyperBO described in *[Pre-trained Gaussian processes for Bayesian optimization](https://www.jmlr.org/papers/v25/23-0269.html)* published in the Journal of Machine Learning Research (JMLR). **[PDF](https://arxiv.org/pdf/2109.08215.pdf)** | **[Blog post](https://ai.googleblog.com/2023/04/pre-trained-gaussian-processes-for.html)** | **[NeurIPS (Journal To Conference Track)](https://neurips.cc/virtual/2024/poster/98319) ** **[Colab Notebook](https://colab.research.google.com/github/google-research/hyperbo/blob/main/hyperbo/hyperbo_demo.ipynb)** | **[PD1 benchmark](https://github.com/google-research/hyperbo#pd1-benchmark)** Disclaimer: This is not an officially supported Google product. ## Tutorial Follow [HyperBO's Colab Notebook](https://colab.research.google.com/github/google-research/hyperbo/blob/main/hyperbo/hyperbo_demo.ipynb) or [Jupyter Notebook](https://github.com/google-research/hyperbo/blob/main/hyperbo/hyperbo_demo.ipynb). Also see tests for a more comprehensive understanding of the usage.
+
+23. google-research/swirl-lm | score=6.5 | fit=promising
+URL: https://github.com/google-research/swirl-lm
+Description: No description
+Language: Python | stars=72 | updated=2026-06-16 | archived=False
+Positive signals: rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Swirl-LM: Computational Fluid Dynamics in TensorFlow *This is not an official Google product* Swirl-LM is a computational fluid dynamics (CFD) simulation framework that is accelerated by the Tensor Processing Unit (TPU). It solves the three dimensional variable-density Navier-Stokes equation using a low-Mach approximation, and the governing equations are discretized by a finite-difference method on a collocated structured mesh. It is implemented in TensorFlow. ## Installation
+
+24. google-research/swirl-jatmos | score=6.4 | fit=watch
+URL: https://github.com/google-research/swirl-jatmos
+Description: Jatmos is a scalable simulator for atmospheric dynamics, written in JAX.
+Language: Python | stars=38 | updated=2026-04-04 | archived=False
+Positive signals: rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Swirl-Jatmos: JAX Atmospheric Simulation *This is not an officially supported Google product.* Jatmos is a tool for performing 3D atmospheric large-eddy simulations in a distributed setting on accelerators such as Google's Tensor Processing Units (TPUs) and GPUs. Jatmos solves the anelastic Navier-Stokes equations on a staggered, Arakawa C-grid, with physics modules supporting equilibrium thermodynamics, one-moment microphysics, and RRTMGP radiative transfer. Jatmos uses JAX's automatic parallelization to achieve parallelism without the
+
+25. google-research/DP-FTRL | score=6.4 | fit=watch
+URL: https://github.com/google-research/DP-FTRL
+Description: DP-FTRL from "Practical and Private (Deep) Learning without Sampling or Shuffling" for centralized training.
+Language: Python | stars=37 | updated=2026-04-03 | archived=False
+Positive signals: rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Differentially Private Follow-the-Regularized-Leader (DP-FTRL) Code for ["Practical and Private (Deep) Learning without Sampling or Shuffling"](https://arxiv.org/abs/2103.00039) by Peter Kairouz, Brendan McMahan, Shuang Song, Om Thakkar, Abhradeep Thakurta, and Zheng Xu. The paper proposed Differentially Private Follow-the-Regularized-Leader (DP-FTRL), a differentially private algorithm that does not rely on shuffling or subsampling as in Differentially Private Stochastic Gradient Descent (DP-SGD), but achieves comparable (or even better) utility. This repository contains the implementation and experiments for *centralized learning*.
+
+26. google-research/r_u_sure | score=6.3 | fit=watch
+URL: https://github.com/google-research/r_u_sure
+Description: Code accompanying the paper "R-U-SURE? Uncertainty-Aware Code Suggestions By Maximizing Utility Across Random User Intents"
+Language: Jupyter Notebook | stars=22 | updated=2026-05-23 | archived=False
+Positive signals: uncertainty
+Negative signals: none
+Potential integration: Candidate for probability calibration, uncertainty-aware predictions, or confidence diagnostics.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # R-U-SURE? Uncertainty-Aware Code Suggestions By Maximizing Utility Across Random User Intents This is the repository accompanying the paper ["R-U-SURE? Uncertainty-Aware Code Suggestions By Maximizing Utility Across Random User Intents"][rusure]. [rusure]: https://arxiv.org/abs/2303.00732 If you use the code released through this repository, please cite the following paper: ``` @article{johnson2023rusure, title     = {{R-U-SURE?} Uncertainty-Aware Code Suggestions By Maximizing
+
+27. google-research/soft-dtw-divergences | score=6.2 | fit=watch
+URL: https://github.com/google-research/soft-dtw-divergences
+Description: An implementation of soft-DTW divergences.
+Language: Python | stars=135 | updated=2026-05-29 | archived=True
+Positive signals: time series
+Negative signals: none
+Potential integration: Candidate for derived temporal features, rolling heatmaps, anomaly intervals, or forecast-based priors.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: Differentiable Divergences between Time Series ============================================== An implementation of soft-DTW divergences. Example ------- ```python import numpy as np from sdtw_div.numba_ops import sdtw_div, sdtw_div_value_and_grad
+
+28. google-research/mrl_eval | score=6.1 | fit=watch
+URL: https://github.com/google-research/mrl_eval
+Description: No description
+Language: Python | stars=11 | updated=2026-04-01 | archived=False
+Positive signals: rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # MRLEval - A Benchmark for Morphologically Rich Languages Note: This is not an officially supported Google product. ## Introduction This repository contains code for evaluating LLMs on various natural language tasks in three Semitic Languages: Modern Hebrew, Modern Standard Arabic and Levantine Arabic. The tasks are detailed [below](#tasks). This page includes instructions for downloading, processing, fine-tuning, running inference, and evaluating models in a fine-tuning setting.
+
+29. google-research/swirl-fem | score=6.0 | fit=watch
+URL: https://github.com/google-research/swirl-fem
+Description: No description
+Language: Python | stars=6 | updated=2025-11-05 | archived=False
+Positive signals: rl
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: # Swirl-FEM: Differentiable Finite Element Simulations in JAX *This is not an officially supported Google product.* This library provides a lightweight and flexible framework for higher order finite element simulations on unstructured quadrilateral or hexahedral meshes. We primarily focus on 2D incompressible Navier-Stokes simulations, with experimental support for running in a distributed setting on Google's Tensor Processing Units (TPUs).
+
+30. google-research/batch-ppo | score=5.8 | fit=watch
+URL: https://github.com/google-research/batch-ppo
+Description: Efficient Batched Reinforcement Learning in TensorFlow
+Language: Python | stars=977 | updated=2026-05-30 | archived=True
+Positive signals: reinforcement
+Negative signals: none
+Potential integration: Candidate for betting policy selection, exploration control, or strategy meta-learning.
+Risk: Treat as experimental until it beats fair, rolling_frequency, last_n, hot, random, bias, and consensus in walk-forward log-loss, Brier, calibration, and top-k.
+README signal: <img src="https://www.tensorflow.org/images/tf_logo_transp.png" width=25% align="right"> Batch PPO ========= This project provides optimized infrastructure for reinforcement learning. It extends the [OpenAI gym interface][post-gym] to multiple parallel environments and allows agents to be implemented in TensorFlow and perform batched computation. As a starting point, we provide BatchPPO, an optimized implementation of [Proximal Policy Optimization][post-ppo].
+
+Full first-pass ranked inventory:
+10.0 | strong    | google-research/timesfm | lang=Python | stars=20958 | updated=2026-06-16 | +[time series, forecast, forecasting] | -[none] | TimesFM (Time Series Foundation Model) is a pretrained time-series foundation model developed by Google Research for time-series forecasting.
+10.0 | strong    | google-research/rliable | lang=Jupyter Notebook | stars=871 | updated=2026-06-10 | +[reinforcement, rl, evaluation, benchmark, metrics] | -[none] | [NeurIPS'21 Outstanding Paper] Library for reliable evaluation on RL and ML benchmarks, even with only a handful of seeds.
+10.0 | strong    | google-research/flood-forecasting | lang=Python | stars=268 | updated=2026-06-16 | +[forecast, forecasting] | -[none] | 
+10.0 | strong    | google-research/rl-reliability-metrics | lang=Python | stars=162 | updated=2026-05-11 | +[statistical, reinforcement, rl, metrics] | -[none] | The RL Reliability Metrics library provides a set of metrics for measuring the reliability of reinforcement learning (RL) algorithms, as well as statistical tools for comparing ...
+10.0 | strong    | google-research/recsim_ng | lang=Jupyter Notebook | stars=127 | updated=2026-06-11 | +[probabilistic, uncertainty, reinforcement, simulation] | -[none] | RecSim NG: Toward Principled Uncertainty Modeling for Recommender Ecosystems
+10.0 | strong    | google-research/zapbench | lang=Python | stars=76 | updated=2026-06-08 | +[time series, forecast, forecasting, benchmark] | -[none] | The Zebrafish Activity Prediction Benchmark measures progress on the problem of predicting cellular-resolution neural activity throughout an entire vertebrate brain.
+10.0 | strong    | google-research/spade_anomaly_detection | lang=Python | stars=53 | updated=2026-06-12 | +[anomaly, detect, detection, classification] | -[none] | Semi-supervised anomaly detection method
+ 8.8 | strong    | google-research/android_world | lang=Python | stars=796 | updated=2026-06-15 | +[rl, benchmark] | -[none] | AndroidWorld is an environment and benchmark for autonomous agents
+ 8.8 | strong    | google-research/robopianist | lang=Python | stars=733 | updated=2026-06-16 | +[reinforcement, rl] | -[none] | [CoRL '23] Dexterous piano playing with deep reinforcement learning.
+ 8.8 | strong    | google-research/batch_rl | lang=Python | stars=559 | updated=2026-05-28 | +[reinforcement, rl] | -[none] | Offline Reinforcement Learning (aka Batch Reinforcement Learning) on Atari 2600 games
+ 8.8 | strong    | google-research/ibc | lang=Python | stars=379 | updated=2026-05-20 | +[reinforcement, rl] | -[none] | Official implementation of Implicit Behavioral Cloning, as described in our CoRL 2021 paper, see more at https://implicitbc.github.io/
+ 8.6 | strong    | google-research/reincarnating_rl | lang=Python | stars=100 | updated=2026-06-10 | +[reinforcement, rl] | -[none] | [NeurIPS 2022] Open source code for reusing prior computational work in RL.
+ 8.3 | strong    | google-research/weatherbenchX | lang=Python | stars=223 | updated=2026-06-16 | +[forecast] | -[none] | A modular framework for evaluating weather forecasts
+ 8.1 | strong    | google-research/swirl-dynamics | lang=Jupyter Notebook | stars=81 | updated=2026-04-11 | +[rl, benchmark] | -[none] | Swirl-Dynamics is a python repository that provides implementations of models, benchmarks and utilities for dynamical systems.
+ 7.8 | promising | google-research/football | lang=Python | stars=3619 | updated=2026-06-16 | +[reinforcement] | -[none] | Check out the new game server:
+ 7.8 | promising | google-research/recsim | lang=Python | stars=786 | updated=2026-06-11 | +[reinforcement, simulation] | -[none] | A Configurable Recommender Systems Simulation Platform
+ 7.3 | promising | google-research/augmix | lang=Python | stars=991 | updated=2026-06-05 | +[uncertainty] | -[none] | AugMix: A Simple Data Processing Method to Improve Robustness and Uncertainty
+ 7.2 | promising | google-research/look-back-when-surprised | lang=Python | stars=15 | updated=2026-06-08 | +[reinforcement] | -[none] | Look Back When Surprised: Stabilizing Reverse Experience Replay for Neural Approximation
+ 6.8 | promising | google-research/realworldrl_suite | lang=Python | stars=365 | updated=2026-05-29 | +[rl, benchmark] | -[none] | Real-World RL Benchmark Suite
+ 6.7 | promising | google-research/dads | lang=Python | stars=198 | updated=2026-05-11 | +[reinforcement, rl] | -[vision] | Code for 'Dynamics-Aware Unsupervised Discovery of Skills' (DADS). Enables skill discovery without supervision, which can be combined with model-based control.
+ 6.6 | promising | google-research/dice_rl | lang=Python | stars=114 | updated=2026-05-07 | +[rl] | -[none] | 
+ 6.6 | promising | google-research/hyperbo | lang=Python | stars=103 | updated=2026-04-01 | +[bayesian] | -[none] | Pre-trained Gaussian processes for Bayesian optimization
+ 6.5 | promising | google-research/swirl-lm | lang=Python | stars=72 | updated=2026-06-16 | +[rl] | -[none] | 
+ 6.4 | watch     | google-research/swirl-jatmos | lang=Python | stars=38 | updated=2026-04-04 | +[rl] | -[none] | Jatmos is a scalable simulator for atmospheric dynamics, written in JAX.
+ 6.4 | watch     | google-research/DP-FTRL | lang=Python | stars=37 | updated=2026-04-03 | +[rl] | -[none] | DP-FTRL from "Practical and Private (Deep) Learning without Sampling or Shuffling" for centralized training.
+ 6.3 | watch     | google-research/r_u_sure | lang=Jupyter Notebook | stars=22 | updated=2026-05-23 | +[uncertainty] | -[none] | Code accompanying the paper "R-U-SURE? Uncertainty-Aware Code Suggestions By Maximizing Utility Across Random User Intents"
+ 6.2 | watch     | google-research/soft-dtw-divergences | lang=Python | stars=135 | updated=2026-05-29 | +[time series] | -[none] | An implementation of soft-DTW divergences.
+ 6.1 | watch     | google-research/mrl_eval | lang=Python | stars=11 | updated=2026-04-01 | +[rl] | -[none] | 
+ 6.0 | watch     | google-research/swirl-fem | lang=Python | stars=6 | updated=2025-11-05 | +[rl] | -[none] | 
+ 5.8 | watch     | google-research/batch-ppo | lang=Python | stars=977 | updated=2026-05-30 | +[reinforcement] | -[none] | Efficient Batched Reinforcement Learning in TensorFlow
+ 5.8 | watch     | google-research/xtreme | lang=Python | stars=652 | updated=2026-04-19 | +[evaluation, benchmark] | -[none] | XTREME is a benchmark for the evaluation of the cross-lingual generalization ability of pre-trained multilingual models that covers 40 typologically diverse languages and includ...
+ 5.8 | watch     | google-research/weatherbench2 | lang=Python | stars=620 | updated=2026-06-16 | +[benchmark] | -[none] | A benchmark for the next generation of data-driven global weather models.
+ 5.8 | watch     | google-research/lm-extraction-benchmark | lang=Python | stars=306 | updated=2026-06-08 | +[benchmark] | -[none] | 
+ 5.7 | watch     | google-research/graphworld | lang=Python | stars=180 | updated=2026-04-19 | +[rl, graph] | -[none] | 
+ 5.7 | watch     | google-research/mt-metrics-eval | lang=Python | stars=133 | updated=2026-06-08 | +[metrics] | -[none] | Tools for evaluating the performance of MT metrics on data from recent WMT metrics shared tasks.
+ 5.6 | watch     | google-research/true | lang=Python | stars=92 | updated=2026-06-16 | +[evaluation] | -[none] | Code and data accompanying the paper "TRUE: Re-evaluating Factual Consistency Evaluation".
+ 5.3 | watch     | google-research/robustness_metrics | lang=Jupyter Notebook | stars=473 | updated=2026-04-01 | +[metrics] | -[none] | 
+ 5.3 | watch     | google-research/agentic-visualization | lang=Python | stars=26 | updated=2026-06-03 | +[visualization] | -[none] | CoDA is a multi-agent framework that turns natural language queries into publication-quality visualizations.
+ 5.3 | watch     | google-research/active-adversarial-tests | lang=Python | stars=24 | updated=2026-06-08 | +[evaluation] | -[none] | Official implementation of the paper "Increasing Confidence in Adversarial Robustness Evaluations"
+ 5.0 | watch     | google-research/policy-learning-landscape | lang=Jupyter Notebook | stars=51 | updated=2025-07-11 | +[reinforcement] | -[none] | Explore the optimization landscape for direct policy learning reinforcement learning.
+ 4.9 | weak      | google-research/fooling-feature-visualizations | lang=Jupyter Notebook | stars=34 | updated=2026-02-03 | +[visualization] | -[none] | Code for "Don't trust your eyes: on the (un)reliability of feature visualizations" (ICML 2024)
+ 4.8 | weak      | google-research/seed_rl | lang=Python | stars=835 | updated=2026-05-28 | +[rl] | -[none] | SEED RL: Scalable and Efficient Deep-RL with Accelerated Central Inference. Implements IMPALA and R2D2 algorithms in TF2 with SEED's architecture.
+ 4.8 | weak      | google-research/ssl_detection | lang=Python | stars=414 | updated=2026-05-01 | +[detect, detection] | -[none] | Semi-supervised learning for object detection
+ 4.8 | weak      | google-research/url-nlp | lang=Python | stars=273 | updated=2026-06-16 | +[rl] | -[nlp] | 
+ 4.8 | weak      | google-research/t2j-bench | lang=Python | stars=2 | updated=2026-06-12 | +[benchmark] | -[none] | T2J-Bench is a benchmark for semantic-preserving codebase conversion.
+ 4.7 | weak      | google-research/world_models | lang=Python | stars=129 | updated=2026-05-26 | +[rl] | -[none] | 
+ 4.6 | weak      | google-research/perch-hoplite | lang=Python | stars=117 | updated=2026-06-16 | +[embedding] | -[none] | Tooling for agile modeling on large machine perception embedding databases.
+ 4.4 | weak      | google-research/rlds-creator | lang=Python | stars=35 | updated=2026-04-19 | +[rl] | -[none] | A web-based tool to collect human data from simulated environments.
+ 4.3 | weak      | google-research/rlds | lang=Jupyter Notebook | stars=489 | updated=2026-06-16 | +[rl] | -[none] | 
+ 4.3 | weak      | google-research/population-dynamics | lang=Jupyter Notebook | stars=407 | updated=2026-06-12 | +[embedding] | -[none] | PDFM Embeddings: location-based vectors for geo-spatial analysis.
+ 4.3 | weak      | google-research/language-table | lang=Jupyter Notebook | stars=360 | updated=2026-06-13 | +[simulation, benchmark] | -[robot, robotics] | Suite of human-collected datasets and a multi-task continuous control benchmark for open vocabulary visuolinguomotor learning.
+ 4.3 | weak      | google-research/slip | lang=Python | stars=21 | updated=2026-06-11 | +[sequence, synthetic] | -[protein] | SLIP is a sandbox environment for engineering protein sequences with synthetic fitness functions.
+ 4.1 | weak      | google-research/unique-randomizer | lang=Python | stars=10 | updated=2025-08-07 | +[sequence] | -[none] | UniqueRandomizer is a data structure for sampling outputs of a randomized program, such as a neural sequence model, incrementally and without replacement.
+ 4.1 | weak      | google-research/weakly_supervised_control | lang=Python | stars=8 | updated=2026-04-19 | +[rl] | -[none] | Weakly-Supervised RL for Controllable Behavior (NeurIPS 2020)
+ 4.1 | weak      | google-research/math-opt-benchmark | lang=C++ | stars=7 | updated=2026-04-01 | +[benchmark] | -[none] | 
+ 3.9 | weak      | google-research/swirl-c | lang=Python | stars=3 | updated=2026-04-01 | +[rl] | -[none] | 
+ 3.9 | weak      | google-research/accelerated_gbm | lang=Python | stars=3 | updated=2026-04-19 | +[gbm] | -[none] | 
+ 3.8 | low       | google-research/arxiv-latex-cleaner | lang=Python | stars=6904 | updated=2026-06-16 | +[none] | -[none] | arXiv LaTeX Cleaner: Easily clean the LaTeX code of your paper to submit to arXiv
+ 3.8 | low       | google-research/t5x | lang=Python | stars=2969 | updated=2026-06-15 | +[none] | -[none] | 
+ 3.8 | low       | google-research/language | lang=Python | stars=1783 | updated=2026-06-16 | +[none] | -[none] | Shared repository for open-sourced projects from the Google AI Language team.
+ 3.8 | low       | google-research/circuit_training | lang=Python | stars=1673 | updated=2026-06-16 | +[none] | -[none] | 
+ 3.8 | low       | google-research/FLAN | lang=Python | stars=1565 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.8 | low       | google-research/morph-net | lang=Python | stars=1037 | updated=2026-06-11 | +[none] | -[none] | Fast & Simple Resource-Constrained Learning of Deep Network Structure
+ 3.8 | low       | google-research/bleurt | lang=Python | stars=792 | updated=2026-05-19 | +[none] | -[none] | BLEURT is a metric for Natural Language Generation based on transfer learning.
+ 3.8 | low       | google-research/jax3d | lang=Python | stars=763 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.8 | low       | google-research/federated | lang=Python | stars=754 | updated=2026-06-09 | +[none] | -[none] | A collection of Google research projects related to Federated Learning and Federated Analytics.
+ 3.8 | weak      | google-research/nasbench | lang=Python | stars=719 | updated=2026-06-08 | +[benchmark] | -[none] | NASBench: A Neural Architecture Search Dataset and Benchmark
+ 3.8 | low       | google-research/pix2struct | lang=Python | stars=684 | updated=2026-05-18 | +[none] | -[none] | 
+ 3.8 | low       | google-research/sam | lang=Python | stars=636 | updated=2026-06-13 | +[none] | -[none] | 
+ 3.8 | weak      | google-research/ravens | lang=Python | stars=631 | updated=2026-05-31 | +[reinforcement, rl] | -[vision, robot, robotics] | Train robotic agents to learn pick and place with deep learning for vision-based manipulation in PyBullet. Transporter Nets, CoRL 2020.
+ 3.8 | low       | google-research/lasertagger | lang=Python | stars=604 | updated=2026-06-03 | +[none] | -[none] | 
+ 3.8 | low       | google-research/arco-era5 | lang=Python | stars=489 | updated=2026-06-16 | +[none] | -[none] | Recipes for reproducing Analysis-Ready & Cloud Optimized (ARCO) ERA5 datasets.
+ 3.8 | low       | google-research/papervizagent | lang=Python | stars=438 | updated=2026-06-15 | +[none] | -[none] | 
+ 3.8 | low       | google-research/reasoning-bank | lang=Python | stars=412 | updated=2026-06-16 | +[none] | -[none] | 
+ 3.8 | low       | google-research/tf-slim | lang=Python | stars=372 | updated=2026-06-10 | +[none] | -[none] | 
+ 3.8 | low       | google-research/perch | lang=Python | stars=368 | updated=2026-06-16 | +[none] | -[none] | 
+ 3.8 | low       | google-research/task_adaptation | lang=Python | stars=354 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.8 | low       | google-research/sparf | lang=Python | stars=301 | updated=2026-06-08 | +[none] | -[none] | This is the official code release for SPARF: Neural Radiance Fields from Sparse and Noisy Poses [CVPR 2023-Highlight]
+ 3.8 | low       | google-research/falken | lang=Python | stars=272 | updated=2026-06-08 | +[none] | -[none] | Falken provides developers with a service that allows them to train AI that can play their games
+ 3.8 | low       | google-research/kauldron | lang=Python | stars=267 | updated=2026-06-16 | +[none] | -[none] | Modular, scalable library to train ML models
+ 3.8 | low       | google-research/meliad | lang=Python | stars=260 | updated=2026-04-01 | +[none] | -[none] | 
+ 3.8 | low       | google-research/perceiver-ar | lang=Python | stars=257 | updated=2026-06-14 | +[none] | -[none] | 
+ 3.8 | low       | google-research/optformer | lang=Python | stars=242 | updated=2026-04-01 | +[none] | -[none] | 
+ 3.8 | low       | google-research/jaxpruner | lang=Python | stars=235 | updated=2026-04-01 | +[none] | -[none] | 
+ 3.7 | low       | google-research/visu3d | lang=Python | stars=166 | updated=2026-05-12 | +[none] | -[none] | 3d without friction (Torch, TF, Jax, Numpy)
+ 3.7 | low       | google-research/metricx | lang=Python | stars=143 | updated=2026-05-23 | +[none] | -[none] | 
+ 3.7 | low       | google-research/spherical-cnn | lang=Python | stars=142 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.7 | weak      | google-research/FirstOrderLp.jl | lang=Julia | stars=129 | updated=2026-04-20 | +[rl] | -[none] | Experimental first-order solvers for linear and quadratic programming.
+ 3.7 | low       | google-research/cad-estate | lang=Python | stars=128 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.7 | low       | google-research/e3x | lang=Python | stars=126 | updated=2026-06-11 | +[none] | -[none] | E3x is a JAX library for constructing efficient E(3)-equivariant deep learning architectures built on top of Flax.
+ 3.6 | low       | google-research/crest | lang=Python | stars=103 | updated=2026-06-08 | +[none] | -[none] | Repo for CReST: A Class-Rebalancing Self-Training Framework for Imbalanced Semi-Supervised Learning
+ 3.6 | low       | google-research/head2toe | lang=Python | stars=82 | updated=2026-01-15 | +[none] | -[none] | 
+ 3.5 | low       | google-research/lanistr | lang=Python | stars=75 | updated=2026-04-01 | +[none] | -[none] | 
+ 3.5 | low       | google-research/mseb | lang=Python | stars=63 | updated=2026-06-16 | +[none] | -[none] | 
+ 3.5 | weak      | google-research/discs | lang=Python | stars=63 | updated=2026-04-01 | +[benchmark] | -[none] | DISCS: The code base for the Benchmark for Discrete Sampling
+ 3.5 | low       | google-research/paper-orchestra | lang=Python | stars=61 | updated=2026-06-15 | +[none] | -[none] | PaperOrchestra is a multi-agent framework for automated AI research paper writing.
+ 3.5 | low       | google-research/connectomics | lang=Python | stars=58 | updated=2026-06-16 | +[none] | -[none] | 
+ 3.5 | low       | google-research/babelcode | lang=Python | stars=56 | updated=2026-05-27 | +[none] | -[none] | 
+ 3.5 | low       | google-research/dataclass_array | lang=Python | stars=54 | updated=2026-05-23 | +[none] | -[none] | Dataclasses manipulated as numpy arrays (with batching, reshape, slicing,...)
+ 3.5 | low       | google-research/MapTrace | lang=Python | stars=53 | updated=2026-05-13 | +[none] | -[none] | 
+ 3.5 | low       | google-research/nisaba | lang=Python | stars=51 | updated=2026-06-12 | +[none] | -[none] | Finite-state script normalization and processing utilities
+ 3.5 | low       | google-research/foundation-model-embedded-3dgs | lang=Python | stars=50 | updated=2026-06-01 | +[none] | -[none] | 
+ 3.4 | weak      | google-research/pisac | lang=Python | stars=45 | updated=2026-04-19 | +[reinforcement, rl] | -[vision, robot, robotics] | Tensorflow 2 source code for the PI-SAC agent from "Predictive Information Accelerates Learning in RL" (NeurIPS 2020)
+ 3.4 | weak      | google-research/perceptual-quality | lang=Python | stars=43 | updated=2026-04-19 | +[metrics] | -[none] | Perceptual quality metrics for TensorFlow
+ 3.4 | low       | google-research/understanding-curricula | lang=Python | stars=34 | updated=2026-04-01 | +[none] | -[none] | 
+ 3.4 | low       | google-research/ecology-georeferencing | lang=Python | stars=31 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.3 | low       | google-research/google-research | lang=Jupyter Notebook | stars=38140 | updated=2026-06-16 | +[none] | -[none] | Google Research
+ 3.3 | low       | google-research/inksight | lang=Jupyter Notebook | stars=990 | updated=2026-06-16 | +[none] | -[none] | 
+ 3.3 | weak      | google-research/meta-dataset | lang=Jupyter Notebook | stars=804 | updated=2026-05-27 | +[benchmark] | -[none] | A dataset of datasets for learning to learn from few examples
+ 3.3 | low       | google-research/vmoe | lang=Jupyter Notebook | stars=725 | updated=2026-06-16 | +[none] | -[none] | 
+ 3.3 | low       | google-research/self-organising-systems | lang=Jupyter Notebook | stars=418 | updated=2026-06-12 | +[none] | -[none] | 
+ 3.3 | low       | google-research/camel-prompt-injection | lang=Jupyter Notebook | stars=341 | updated=2026-06-12 | +[none] | -[none] | Code for the paper "Defeating Prompt Injections by Design"
+ 3.3 | weak      | google-research/syn-rep-learn | lang=Python | stars=327 | updated=2026-06-10 | +[synthetic] | -[none] | Learning from synthetic data - code and models
+ 3.3 | low       | google-research/era | lang=Jupyter Notebook | stars=243 | updated=2026-06-16 | +[none] | -[none] | Code associated with the paper An AI system to help scientists write expert-level empirical software
+ 3.3 | low       | google-research/sunds | lang=Python | stars=26 | updated=2025-02-25 | +[none] | -[none] | 
+ 3.3 | low       | google-research/diffren | lang=Python | stars=26 | updated=2026-04-01 | +[none] | -[none] | 
+ 3.3 | low       | google-research/troyvis | lang=Python | stars=25 | updated=2026-06-03 | +[none] | -[none] | 
+ 3.3 | low       | google-research/remote-sensing | lang=Python | stars=19 | updated=2026-06-01 | +[none] | -[none] | 
+ 3.2 | low       | google-research/mood-board-search | lang=Jupyter Notebook | stars=179 | updated=2026-06-16 | +[none] | -[none] | 
+ 3.2 | low       | google-research/pathdreamer | lang=Jupyter Notebook | stars=164 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.2 | low       | google-research/readout_guidance | lang=Jupyter Notebook | stars=155 | updated=2026-06-05 | +[none] | -[none] | Official PyTorch Implementation for Readout Guidance, CVPR 2024
+ 3.2 | low       | google-research/neural-structural-optimization | lang=Jupyter Notebook | stars=129 | updated=2026-05-24 | +[none] | -[none] | Neural reparameterization improves structural optimization
+ 3.2 | low       | google-research/social_cascades | lang=Python | stars=17 | updated=2026-05-23 | +[none] | -[none] | 
+ 3.2 | weak      | google-research/hybrid_rcc | lang=C++ | stars=16 | updated=2026-02-20 | +[statistics] | -[none] | A C++ library for information theory and probability
+ 3.2 | weak      | google-research/pactran_metrics | lang=Python | stars=14 | updated=2025-02-22 | +[metrics] | -[none] | 
+ 3.2 | low       | google-research/ingestables | lang=Python | stars=13 | updated=2026-05-09 | +[none] | -[none] | 
+ 3.1 | low       | google-research/unified_functional_hashing | lang=Python | stars=11 | updated=2025-07-27 | +[none] | -[none] | 
+ 3.1 | low       | google-research/pydemos | lang=Python | stars=11 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.1 | low       | google-research/large_scale_mmdma | lang=Python | stars=11 | updated=2026-04-01 | +[none] | -[none] | 
+ 3.1 | low       | google-research/honeyval | lang=Python | stars=11 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.1 | low       | google-research/domain-robust | lang=Python | stars=9 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.1 | low       | google-research/protoscribe | lang=Python | stars=7 | updated=2025-11-14 | +[none] | -[none] | 
+ 3.0 | low       | google-research/agent-based-epidemic-sim | lang=Jupyter Notebook | stars=64 | updated=2026-06-08 | +[none] | -[none] | 
+ 3.0 | low       | google-research/growneuron | lang=Jupyter Notebook | stars=56 | updated=2025-10-13 | +[none] | -[none] | 
+ 3.0 | low       | google-research/deadunits | lang=Python | stars=5 | updated=2025-02-22 | +[none] | -[none] | 
+ 2.9 | low       | google-research/precondition | lang=Jupyter Notebook | stars=35 | updated=2026-06-08 | +[none] | -[none] | 
+ 2.8 | low       | google-research/tuning_playbook | lang=unknown | stars=30189 | updated=2026-06-16 | +[none] | -[none] | A playbook for systematically maximizing the performance of deep learning models.
+ 2.8 | weak      | google-research/kubric | lang=Jupyter Notebook | stars=2755 | updated=2026-06-16 | +[synthetic] | -[video] | A data generation pipeline for creating semi-realistic synthetic multi-object videos with rich annotations such as instance segmentation masks, depth maps, and optical flow.
+ 2.8 | low       | google-research/dex-lang | lang=Haskell | stars=1684 | updated=2026-06-01 | +[none] | -[none] | Research language for array processing in the Haskell/ML family
+ 2.8 | low       | google-research/parti | lang=unknown | stars=1592 | updated=2026-06-06 | +[none] | -[none] | 
+ 2.8 | weak      | google-research/bigbird | lang=Python | stars=634 | updated=2026-05-30 | +[sequence] | -[nlp] | Transformers for Longer Sequences
+ 2.8 | weak      | google-research/mint | lang=Python | stars=560 | updated=2026-06-04 | +[graph] | -[none] | Multi-modal Content Creation Model Training Infrastructure including the FACT model (AI Choreographer) implementation.
+ 2.8 | weak      | google-research/python-graphs | lang=Python | stars=342 | updated=2026-04-09 | +[graph] | -[none] | A static analysis library for computing graph representations of Python programs suitable for use with graph neural networks.
+ 2.8 | low       | google-research/si-score | lang=Jupyter Notebook | stars=27 | updated=2026-06-08 | +[none] | -[none] | 
+ 2.8 | weak      | google-research/DBAP-simulation | lang=Python | stars=2 | updated=2026-06-11 | +[simulation] | -[none] | 
+ 2.8 | low       | google-research/gowu | lang=Python | stars=1 | updated=2026-06-15 | +[none] | -[none] | 
+ 2.7 | low       | google-research/socialgood | lang=Jupyter Notebook | stars=16 | updated=2026-05-03 | +[none] | -[none] | 
+ 2.6 | weak      | google-research/plur | lang=Python | stars=90 | updated=2026-04-08 | +[graph] | -[none] | PLUR (Programming-Language Understanding and Repair) is a collection of source code datasets suitable for graph-based machine learning. We provide scripts for downloading, proce...
+ 2.6 | low       | google-research/cloud-ai-research | lang=Jupyter Notebook | stars=8 | updated=2026-05-28 | +[none] | -[none] | The Google Cloud AI Research team tackles AI research challenges motivated by Google Cloud’s mission of bringing AI to tech, healthcare, finance, retail and many other industrie...
+ 2.6 | low       | google-research/symmetric-chain-decomposition | lang=Python | stars=0 | updated=2026-06-14 | +[none] | -[none] | 
+ 2.5 | low       | google-research/structured-additive-IR | lang=C++ | stars=61 | updated=2026-04-01 | +[none] | -[none] | 
+ 2.5 | low       | google-research/tabnas | lang=Jupyter Notebook | stars=6 | updated=2026-03-20 | +[none] | -[none] | 
+ 2.5 | low       | google-research/nodesynth | lang=Jupyter Notebook | stars=6 | updated=2026-06-10 | +[none] | -[none] | 
+ 2.5 | low       | google-research/generalized-pde-emulator | lang=Jupyter Notebook | stars=6 | updated=2026-04-13 | +[none] | -[none] | 
+ 2.5 | low       | google-research/diffusion-score-smoothing | lang=Jupyter Notebook | stars=5 | updated=2026-06-08 | +[none] | -[none] | 
+ 2.4 | weak      | google-research/causal-agents | lang=unknown | stars=48 | updated=2026-04-23 | +[causal] | -[none] | 
+ 2.4 | low       | google-research/CVD-paper-mobile-camera-example | lang=Kotlin | stars=44 | updated=2026-04-23 | +[none] | -[none] | 
+ 2.4 | low       | google-research/tf-opt | lang=C++ | stars=43 | updated=2026-04-01 | +[none] | -[none] | 
+ 2.4 | low       | google-research/openfst | lang=C++ | stars=40 | updated=2026-06-16 | +[none] | -[none] | Finite-state Transducer (FST) Library.
+ 2.4 | low       | google-research/raksha | lang=C++ | stars=38 | updated=2026-05-27 | +[none] | -[none] | 
+ 2.3 | low       | google-research/text-to-text-transfer-transformer | lang=Python | stars=6523 | updated=2026-06-16 | +[none] | -[text] | Code for the paper "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer"
+ 2.3 | weak      | google-research/pix2seq | lang=Jupyter Notebook | stars=944 | updated=2026-06-15 | +[detect, detection] | -[vision] | Pix2Seq codebase: multi-tasks with generative modeling (autoregressive and diffusion)
+ 2.3 | weak      | google-research/maxvit | lang=Jupyter Notebook | stars=499 | updated=2026-05-02 | +[detect, detection, classification] | -[image, vision] | [ECCV 2022] Official repository for "MaxViT: Multi-Axis Vision Transformer". SOTA foundation models for classification, detection, segmentation, image quality, and generative mo...
+ 2.3 | low       | google-research/ml-for-systems-taxonomy | lang=TeX | stars=20 | updated=2026-06-10 | +[none] | -[none] | 
+ 2.3 | low       | google-research/tpu-hpc | lang=Jupyter Notebook | stars=2 | updated=2026-06-14 | +[none] | -[none] | 
+ 2.2 | weak      | google-research/talk-like-a-graph | lang=Jupyter Notebook | stars=173 | updated=2026-05-15 | +[graph] | -[none] | 
+ 2.2 | weak      | google-research/clevr_robot_env | lang=Python | stars=139 | updated=2026-05-21 | +[reinforcement] | -[vision, robot] | CLEVR-Robot: a reinforcement learning environment combining vision, language and control.
+ 2.2 | weak      | google-research/robel-scenes | lang=unknown | stars=14 | updated=2026-06-11 | +[simulation] | -[none] | Shared MuJoCo simulation scenes and assets for ROBEL environments.
+ 2.1 | weak      | google-research/graph-attribution | lang=Jupyter Notebook | stars=84 | updated=2026-06-01 | +[graph] | -[none] | Codebase for Evaluating Attribution for Graph Neural Networks.
+ 2.0 | low       | google-research/lingvo-lab | lang=HTML | stars=61 | updated=2025-10-28 | +[none] | -[none] | Demos, samples, and experimental code for Lingvo.
+ 1.9 | low       | google-research/last | lang=Python | stars=49 | updated=2026-04-08 | +[none] | -[speech] | A JAX library for building lattice-based speech transducer models
+ 1.9 | low       | google-research/tnco | lang=Python | stars=34 | updated=2026-05-23 | +[none] | -[quantum] | TNCO is a heuristic tool that optimizes tensor network contraction paths.
+ 1.8 | low       | google-research/multinerf | lang=Python | stars=3808 | updated=2026-06-05 | +[none] | -[none] | A Code Release for Mip-NeRF 360, Ref-NeRF, and RawNeRF
+ 1.8 | low       | google-research/scenic | lang=Python | stars=3807 | updated=2026-06-15 | +[none] | -[vision] | Scenic: A Jax Library for Computer Vision Research and Beyond
+ 1.8 | low       | google-research/albert | lang=Python | stars=3280 | updated=2026-06-13 | +[none] | -[none] | ALBERT: A Lite BERT for Self-supervised Learning of Language Representations
+ 1.8 | low       | google-research/torchsde | lang=Python | stars=1724 | updated=2026-06-15 | +[none] | -[none] | Differentiable SDE solvers with GPU support and efficient sensitivity analysis.
+ 1.8 | low       | google-research/pegasus | lang=Python | stars=1657 | updated=2026-06-13 | +[none] | -[none] | 
+ 1.8 | low       | google-research/disentanglement_lib | lang=Python | stars=1434 | updated=2026-06-10 | +[none] | -[none] | disentanglement_lib is an open-source library for research on learning disentangled representations.
+ 1.8 | low       | google-research/multilingual-t5 | lang=Python | stars=1293 | updated=2026-06-16 | +[none] | -[none] | 
+ 1.8 | low       | google-research/planet | lang=Python | stars=1259 | updated=2026-06-15 | +[none] | -[none] | Learning Latent Dynamics for Planning from Pixels
+ 1.8 | low       | google-research/fixmatch | lang=Python | stars=1221 | updated=2026-06-05 | +[none] | -[none] | A simple method to perform semi-supervised learning with limited data.
+ 1.8 | low       | google-research/mixmatch | lang=Python | stars=1143 | updated=2026-05-29 | +[none] | -[none] | 
+ 1.8 | low       | google-research/deeplab2 | lang=Python | stars=1036 | updated=2026-05-28 | +[none] | -[none] | DeepLab2 is a TensorFlow library for deep labeling, aiming to provide a unified and state-of-the-art TensorFlow codebase for dense pixel labeling tasks.
+ 1.8 | weak      | google-research/long-range-arena | lang=Python | stars=788 | updated=2026-05-04 | +[benchmark] | -[nlp] | Long Range Arena for Benchmarking Efficient Transformers
+ 1.8 | low       | google-research/noisystudent | lang=Python | stars=763 | updated=2026-05-03 | +[none] | -[none] | Code for Noisy Student Training. https://arxiv.org/abs/1911.04252
+ 1.8 | low       | google-research/lottery-ticket-hypothesis | lang=Python | stars=730 | updated=2026-05-08 | +[none] | -[none] | A reimplementation of "The Lottery Ticket Hypothesis" (Frankle and Carbin) on MNIST.
+ 1.8 | low       | google-research/dreamer | lang=Python | stars=728 | updated=2026-06-11 | +[none] | -[none] | Dream to Control: Learning Behaviors by Latent Imagination
+ 1.8 | low       | google-research/sound-separation | lang=Python | stars=712 | updated=2026-06-16 | +[none] | -[none] | 
+ 1.8 | low       | google-research/fast-soft-sort | lang=Python | stars=626 | updated=2026-05-25 | +[none] | -[none] | Fast Differentiable Sorting and Ranking
+ 1.8 | low       | google-research/distilling-step-by-step | lang=Python | stars=594 | updated=2026-06-11 | +[none] | -[none] | 
+ 1.8 | low       | google-research/byt5 | lang=Python | stars=546 | updated=2026-06-11 | +[none] | -[none] | 
+ 1.8 | low       | google-research/adapter-bert | lang=Python | stars=505 | updated=2026-05-22 | +[none] | -[none] | 
+ 1.8 | low       | google-research/l2p | lang=Python | stars=477 | updated=2026-06-13 | +[none] | -[none] | Learning to Prompt (L2P) for Continual Learning @ CVPR22 and DualPrompt: Complementary Prompting for Rehearsal-free Continual Learning @ ECCV22
+ 1.8 | low       | google-research/receptive_field | lang=Python | stars=451 | updated=2026-05-31 | +[none] | -[none] | Compute receptive fields of your favorite convnets
+ 1.8 | low       | google-research/Splat-SLAM | lang=Python | stars=356 | updated=2026-06-16 | +[none] | -[none] | Splat-SLAM: Globally Optimized RGB-only SLAM with 3D Gaussians
+ 1.8 | low       | google-research/rigl | lang=Python | stars=337 | updated=2026-05-29 | +[none] | -[vision] | End-to-end training of sparse deep neural networks with little-to-no performance loss.
+ 1.8 | low       | google-research/exoplanet-ml | lang=Python | stars=319 | updated=2026-06-12 | +[none] | -[none] | Machine learning models and utilities for exoplanet science.
+ 1.8 | low       | google-research/tensorflow_constrained_optimization | lang=Python | stars=312 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.8 | low       | google-research/tensorflow-coder | lang=Python | stars=278 | updated=2026-04-26 | +[none] | -[none] | 
+ 1.8 | low       | google-research/3d-moments | lang=Python | stars=251 | updated=2026-04-19 | +[none] | -[none] | Code for CVPR 2022 paper '3D Moments from Near-Duplicate Photos'
+ 1.8 | low       | google-research/cascades | lang=Python | stars=222 | updated=2026-06-08 | +[none] | -[language model] | Python library which enables complex compositions of language models such as scratchpads, chain of thought, tool use, selection-inference, and more.
+ 1.8 | low       | google-research/medical-ai-research-foundations | lang=Python | stars=219 | updated=2026-05-13 | +[none] | -[none] | 
+ 1.8 | low       | google-research/ott | lang=Python | stars=214 | updated=2026-04-18 | +[none] | -[none] | 
+ 1.8 | low       | google-research/usnea | lang=TypeScript | stars=20 | updated=2026-06-08 | +[none] | -[none] | 
+ 1.8 | weak      | google-research/vmf_embeddings | lang=Python | stars=10 | updated=2024-07-10 | +[embedding] | -[none] | 
+ 1.7 | low       | google-research/snap | lang=Python | stars=196 | updated=2026-05-28 | +[none] | -[none] | SNAP: Self-supervised Neural Maps for Visual Positioning and Semantic Understanding (NeurIPS 2023)
+ 1.7 | low       | google-research/lag | lang=Python | stars=192 | updated=2026-05-03 | +[none] | -[none] | 
+ 1.7 | low       | google-research/proteinfer | lang=Jupyter Notebook | stars=189 | updated=2026-06-11 | +[none] | -[protein] | Deep networks for protein functional inference
+ 1.7 | low       | google-research/longt5 | lang=Python | stars=184 | updated=2026-05-15 | +[none] | -[none] | 
+ 1.7 | low       | google-research/smore | lang=Python | stars=164 | updated=2026-05-15 | +[none] | -[none] | 
+ 1.7 | low       | google-research/skai | lang=Python | stars=163 | updated=2026-06-08 | +[none] | -[image] | SKAI is a machine learning based tool for performing automatic building damage assessments on aerial imagery of disaster sites.
+ 1.7 | low       | google-research/deep_representation_one_class | lang=Python | stars=155 | updated=2026-05-01 | +[none] | -[none] | 
+ 1.7 | low       | google-research/semivl | lang=Python | stars=147 | updated=2026-06-08 | +[none] | -[vision] | [ECCV'24] Official Implementation of SemiVL: Semi-Supervised Semantic Segmentation with Vision-Language Guidance
+ 1.7 | low       | google-research/relay-policy-learning | lang=Python | stars=137 | updated=2026-06-05 | +[none] | -[none] | 
+ 1.7 | low       | google-research/remixmatch | lang=Python | stars=132 | updated=2026-04-30 | +[none] | -[none] | 
+ 1.7 | low       | google-research/selfstudy-adversarial-robustness | lang=Python | stars=131 | updated=2026-05-28 | +[none] | -[none] | 
+ 1.6 | low       | google-research/diffstride | lang=Python | stars=124 | updated=2026-04-19 | +[none] | -[none] | TF/Keras code for DiffStride, a pooling layer with learnable strides.
+ 1.6 | low       | google-research/corenet | lang=Python | stars=122 | updated=2026-06-08 | +[none] | -[image] | CoReNet is a technique for joint multi-object 3D reconstruction from a single RGB image.
+ 1.6 | low       | google-research/open-covid-19-data | lang=Python | stars=119 | updated=2026-04-19 | +[none] | -[none] | Open source aggregation pipeline for public COVID-19 data, including hospitalization/ICU/ventilator numbers for many countries.
+ 1.6 | low       | google-research/pddm | lang=Python | stars=116 | updated=2026-05-29 | +[none] | -[none] | 
+ 1.6 | low       | google-research/t5x_retrieval | lang=Python | stars=102 | updated=2026-05-08 | +[none] | -[none] | 
+ 1.6 | low       | google-research/xmcgan_image_generation | lang=Python | stars=100 | updated=2026-06-08 | +[none] | -[image] | 
+ 1.6 | low       | google-research/s4l | lang=Python | stars=95 | updated=2026-04-19 | +[none] | -[none] | Tensorflow implementation of S4L: Self-Supervised Semi-Supervised Learning
+ 1.6 | low       | google-research/chain-of-table | lang=Python | stars=94 | updated=2026-05-24 | +[none] | -[none] | Code for paper Chain-of-Table: Evolving Tables in the Reasoning Chain for Table Understanding
+ 1.6 | low       | google-research/robodesk | lang=Python | stars=82 | updated=2026-03-11 | +[none] | -[none] | 
+ 1.6 | low       | google-research/human-scene-transformer | lang=Python | stars=80 | updated=2026-04-03 | +[none] | -[none] | Human Scene Transformer: A framework for trajectory prediction and wrappers for reframing the JRDB dataset for the prediction task.
+ 1.5 | low       | google-research/task-oriented-dialogue | lang=Python | stars=74 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.5 | low       | google-research/jax-influence | lang=Python | stars=67 | updated=2026-05-28 | +[none] | -[none] | 
+ 1.5 | low       | google-research/fitvid | lang=Python | stars=67 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.5 | low       | google-research/adamatch | lang=Python | stars=67 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.5 | low       | google-research/heldout-influence-estimation | lang=Python | stars=62 | updated=2025-02-17 | +[none] | -[none] | 
+ 1.5 | low       | google-research/masksketch | lang=Python | stars=57 | updated=2026-06-07 | +[none] | -[none] | 
+ 1.5 | low       | google-research/cryptanalytic-model-extraction | lang=Python | stars=57 | updated=2026-05-17 | +[none] | -[none] | 
+ 1.5 | low       | google-research/xtreme-up | lang=Python | stars=53 | updated=2026-02-27 | +[none] | -[none] | 
+ 1.5 | low       | google-research/arcade-nl2code | lang=Python | stars=53 | updated=2026-05-16 | +[none] | -[none] | 
+ 1.5 | weak      | google-research/hyper-rectangular-clustering | lang=C++ | stars=5 | updated=2026-04-01 | +[clustering] | -[none] | 
+ 1.4 | low       | google-research/understanding-transfer-learning | lang=Python | stars=45 | updated=2025-05-04 | +[none] | -[none] | 
+ 1.4 | low       | google-research/crossbeam | lang=Python | stars=44 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.4 | low       | google-research/compressive-visual-representations | lang=Python | stars=37 | updated=2026-04-19 | +[none] | -[none] | Tensorflow 2 implementations of the C-SimCLR and C-BYOL self-supervised visual representation methods from "Compressive Visual Representations" (NeurIPS 2021)
+ 1.4 | low       | google-research/gpax | lang=Python | stars=31 | updated=2025-11-20 | +[none] | -[none] | 
+ 1.3 | low       | google-research/vision_transformer | lang=Jupyter Notebook | stars=12584 | updated=2026-06-15 | +[none] | -[vision] | 
+ 1.3 | low       | google-research/big_vision | lang=Jupyter Notebook | stars=3472 | updated=2026-06-16 | +[none] | -[vision] | Official codebase used to develop Vision Transformer, SigLIP, MLP-Mixer, LiT and more.
+ 1.3 | low       | google-research/maskgit | lang=Jupyter Notebook | stars=561 | updated=2026-05-31 | +[none] | -[none] | Official Jax Implementation of MaskGIT
+ 1.3 | low       | google-research/computation-thru-dynamics | lang=Jupyter Notebook | stars=393 | updated=2026-04-19 | +[none] | -[none] | Understanding computation in artificial and biological recurrent networks through the lens of dynamical systems.
+ 1.3 | low       | google-research/vdm | lang=Jupyter Notebook | stars=332 | updated=2026-06-07 | +[none] | -[none] | 
+ 1.3 | low       | google-research/episodic-curiosity | lang=Jupyter Notebook | stars=205 | updated=2026-06-08 | +[none] | -[none] | Tensorflow/Keras code and trained models for Episodic Curiosity Through Reachability
+ 1.3 | low       | google-research/sloe-logistic | lang=Python | stars=29 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.3 | low       | google-research/m2svid | lang=Python | stars=28 | updated=2026-06-13 | +[none] | -[video] | This is the official code release for “M2SVid: End-to-End Inpainting and Refinement for Monocular-to-Stereo Video Conversion”. 3DV 2026
+ 1.3 | low       | google-research/fnc | lang=Python | stars=28 | updated=2025-06-26 | +[none] | -[none] | 
+ 1.3 | low       | google-research/met | lang=Python | stars=26 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.3 | low       | google-research/interpretability-theory | lang=Python | stars=26 | updated=2026-01-09 | +[none] | -[none] | 
+ 1.3 | low       | google-research/runtime-error-prediction | lang=Python | stars=25 | updated=2025-12-02 | +[none] | -[none] | This is the repository for the paper Static Prediction of Runtime Errors by Learning to Execute Programs with External Resource Descriptions, and for the Python Runtime Errors (...
+ 1.3 | low       | google-research/generative_transfer | lang=Python | stars=25 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.3 | low       | google-research/public-data-in-dpfl | lang=Python | stars=23 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.3 | low       | google-research/noisy-fewshot-learning | lang=Python | stars=23 | updated=2026-02-13 | +[none] | -[none] | 
+ 1.3 | low       | google-research/localmot | lang=Python | stars=22 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.3 | low       | google-research/wide-sparse-nets | lang=Python | stars=19 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.3 | low       | google-research/pyreach | lang=Python | stars=19 | updated=2025-12-19 | +[none] | -[none] | 
+ 1.3 | low       | google-research/preprocessor-aware-black-box-attack | lang=Python | stars=19 | updated=2026-03-20 | +[none] | -[none] | 
+ 1.2 | low       | google-research/data-driven-advection | lang=Jupyter Notebook | stars=196 | updated=2026-04-30 | +[none] | -[none] | 
+ 1.2 | low       | google-research/reverse-engineering-neural-networks | lang=Jupyter Notebook | stars=171 | updated=2026-05-28 | +[none] | -[none] | A collection of tools for reverse engineering neural networks.
+ 1.2 | low       | google-research/opticalflow-autoflow | lang=Jupyter Notebook | stars=126 | updated=2026-04-17 | +[none] | -[none] | 
+ 1.2 | low       | google-research/pynsy | lang=Python | stars=18 | updated=2026-05-14 | +[none] | -[none] | Heavyweight Python dynamic analysis framework
+ 1.2 | low       | google-research/label-dp | lang=Python | stars=18 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.2 | low       | google-research/vet | lang=Python | stars=17 | updated=2026-04-21 | +[none] | -[none] | 
+ 1.2 | low       | google-research/mma | lang=Python | stars=14 | updated=2025-02-22 | +[none] | -[none] | 
+ 1.2 | low       | google-research/heatnet | lang=Python | stars=13 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.1 | low       | google-research/sofima | lang=Jupyter Notebook | stars=97 | updated=2026-05-22 | +[none] | -[image] | Scalable Optical Flow-based Image Montaging and Alignment
+ 1.1 | low       | google-research/deep_ope | lang=Jupyter Notebook | stars=88 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.1 | low       | google-research/autoconj | lang=Python | stars=36 | updated=2024-01-04 | +[none] | -[none] | Recognizing and exploiting conjugacy without a domain-specific language
+ 1.1 | weak      | google-research/causallm_icl | lang=Python | stars=10 | updated=2025-03-24 | +[causal] | -[llm] | 
+ 1.1 | low       | google-research/group_testing | lang=Python | stars=9 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.0 | low       | google-research/mnist-c | lang=Jupyter Notebook | stars=72 | updated=2026-05-03 | +[none] | -[none] | 
+ 1.0 | low       | google-research/firebench | lang=Jupyter Notebook | stars=50 | updated=2026-06-05 | +[none] | -[none] | 
+ 1.0 | low       | google-research/simplicity-bias | lang=Python | stars=6 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.0 | low       | google-research/korvapuusti | lang=Python | stars=6 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.0 | low       | google-research/jumping-task | lang=Python | stars=6 | updated=2026-04-19 | +[none] | -[none] | 
+ 1.0 | low       | google-research/privateFM | lang=Python | stars=5 | updated=2026-04-19 | +[none] | -[none] | Code for differentially private Flajolet-Martin sketch.
+ 0.9 | low       | google-research/evoflow | lang=Jupyter Notebook | stars=36 | updated=2026-05-27 | +[none] | -[none] | 
+ 0.9 | low       | google-research/crafty | lang=Python | stars=4 | updated=2026-04-19 | +[none] | -[none] | 
+ 0.9 | low       | google-research/gp-source-inference | lang=Python | stars=3 | updated=2026-04-19 | +[none] | -[none] | 
+ 0.8 | low       | google-research/sputnik | lang=C++ | stars=288 | updated=2026-05-01 | +[none] | -[none] | A library of GPU kernels for sparse matrix operations.
+ 0.8 | low       | google-research/OOD-failures | lang=Jupyter Notebook | stars=24 | updated=2026-04-19 | +[none] | -[none] | 
+ 0.8 | low       | google-research/DBAP-algorithm | lang=Python | stars=2 | updated=2026-04-19 | +[none] | -[none] | 
+ 0.7 | low       | google-research/composed_image_retrieval | lang=Shell | stars=197 | updated=2026-06-08 | +[none] | -[image] | 
+ 0.7 | low       | google-research/libsoftwaresync | lang=Java | stars=173 | updated=2026-06-05 | +[none] | -[none] | :camera: :camera: :camera: :camera: :camera: Wireless software synchronization of multiple distributed smartphone cameras.
+ 0.7 | low       | google-research/swift-tfp | lang=Swift | stars=152 | updated=2026-03-11 | +[none] | -[none] | Find shape errors before you run your code!
+ 0.7 | weak      | google-research/robel | lang=Python | stars=150 | updated=2026-04-19 | +[benchmark] | -[robot, robotics] | ROBEL: Robotics Benchmarks for Learning with low-cost robots
+ 0.7 | low       | google-research/metalang | lang=Python | stars=6 | updated=2023-10-19 | +[none] | -[none] | 
+ 0.6 | low       | google-research/project-guideline | lang=C++ | stars=101 | updated=2026-06-04 | +[none] | -[vision] | Project Guideline is a research project that leverages on-device ML to enable people who are blind and low-vision to walk or run for exercise independently.
+ 0.6 | low       | google-research/multi-morph-checklist | lang=Jupyter Notebook | stars=10 | updated=2025-08-06 | +[none] | -[none] | 
+ 0.6 | low       | google-research/sparse_dp_histograms | lang=Jupyter Notebook | stars=8 | updated=2025-07-10 | +[none] | -[none] | 
+ 0.6 | low       | google-research/ruse | lang=Python | stars=4 | updated=2023-01-27 | +[none] | -[none] | 
+ 0.6 | low       | google-research/modeljoust | lang=Python | stars=3 | updated=2023-12-07 | +[none] | -[none] | 
+ 0.5 | low       | google-research/mozolm | lang=C++ | stars=53 | updated=2026-06-05 | +[none] | -[language model] | MozoLM: A language model (LM) serving library
+ 0.5 | low       | google-research/laurel | lang=Jupyter Notebook | stars=5 | updated=2025-07-29 | +[none] | -[none] | 
+ 0.3 | low       | google-research/leaf-audio | lang=Python | stars=525 | updated=2026-06-03 | +[none] | -[audio] | LEAF is a learnable alternative to audio features such as mel-filterbanks, that can be initialized as an approximation of mel-filterbanks, and then be trained for the task at ha...
+ 0.3 | low       | google-research/dialog-inpainting | lang=unknown | stars=97 | updated=2024-12-27 | +[none] | -[none] | 
+ 0.3 | low       | google-research/vaccination-search-insights | lang=Svelte | stars=22 | updated=2026-04-01 | +[none] | -[none] | A dashboard that visualizes publicly released Google Vaccination Search data.
+ 0.3 | low       | google-research/automemcpy | lang=C++ | stars=21 | updated=2026-03-31 | +[none] | -[none] | 
+ 0.2 | low       | google-research/seanet | lang=HTML | stars=133 | updated=2026-04-01 | +[none] | -[none] | 
+ 0.2 | low       | google-research/trc | lang=unknown | stars=13 | updated=2026-05-17 | +[none] | -[none] | 
+ 0.2 | low       | google-research/LargeScaleLpInfeasibility | lang=Julia | stars=13 | updated=2026-02-14 | +[none] | -[none] | 
+ 0.1 | low       | google-research/generic-adaptive-restarts | lang=Julia | stars=8 | updated=2026-04-19 | +[none] | -[none] | 
+ 0.1 | low       | google-research/cross-replication-reliability | lang=Java | stars=8 | updated=2026-04-19 | +[none] | -[none] | 
+ 0.0 | low       | google-research/bert | lang=Python | stars=40029 | updated=2026-06-16 | +[none] | -[nlp] | TensorFlow code and pre-trained models for BERT
+ 0.0 | low       | google-research/simclr | lang=Jupyter Notebook | stars=4501 | updated=2026-06-16 | +[none] | -[vision] | SimCLRv2 - Big Self-Supervised Models are Strong Semi-Supervised Learners
+ 0.0 | low       | google-research/frame-interpolation | lang=Python | stars=3130 | updated=2026-06-16 | +[none] | -[video] | FILM: Frame Interpolation for Large Motion, In ECCV 2022.
+ 0.0 | low       | google-research/electra | lang=Python | stars=2368 | updated=2026-06-02 | +[none] | -[nlp, text] | ELECTRA: Pre-training Text Encoders as Discriminators Rather Than Generators
+ 0.0 | low       | google-research/uda | lang=Python | stars=2206 | updated=2026-05-29 | +[none] | -[nlp, vision] | Unsupervised Data Augmentation (UDA)
+ 0.0 | low       | google-research/robotics_transformer | lang=Python | stars=1731 | updated=2026-06-16 | +[none] | -[robot, robotics] | 
+ 0.0 | low       | google-research/big_transfer | lang=Python | stars=1541 | updated=2026-05-13 | +[none] | -[image] | Official repository for the "Big Transfer (BiT): General Visual Representation Learning" paper.
+ 0.0 | low       | google-research/deduplicate-text-datasets | lang=Rust | stars=1273 | updated=2026-05-26 | +[none] | -[text] | 
+ 0.0 | low       | google-research/tapas | lang=Python | stars=1203 | updated=2026-04-01 | +[none] | -[nlp, text] | End-to-end neural table-text understanding models.
+ 0.0 | low       | google-research/maxim | lang=Python | stars=1084 | updated=2026-06-09 | +[none] | -[image, vision] | [CVPR 2022 Oral] Official repository for "MAXIM: Multi-Axis MLP for Image Processing". SOTA for denoising, deblurring, deraining, dehazing, and enhancement.
+ 0.0 | low       | google-research/magvit | lang=Python | stars=1000 | updated=2026-06-12 | +[none] | -[video] | Official JAX implementation of MAGVIT: Masked Generative Video Transformer
+ 0.0 | low       | google-research/omniglue | lang=Python | stars=711 | updated=2026-06-04 | +[none] | -[image] | Code release for CVPR'24 submission 'OmniGlue'
+ 0.0 | low       | google-research/prompt-tuning | lang=Python | stars=701 | updated=2026-05-20 | +[none] | -[language model, nlp] | Original Implementation of Prompt Tuning from Lester, et al, 2021
+ 0.0 | low       | google-research/tensor2robot | lang=Python | stars=565 | updated=2026-05-22 | +[none] | -[robot, robotics] | Distributed machine learning infrastructure for large-scale robotics research
+ 0.0 | low       | google-research/nerf-from-image | lang=Python | stars=397 | updated=2026-03-23 | +[none] | -[image] | Shape, Pose, and Appearance from a Single Image via Bootstrapped Radiance Field Inversion
+ 0.0 | weak      | google-research/retvec | lang=Jupyter Notebook | stars=292 | updated=2026-06-03 | +[classification] | -[nlp, text] | RETVec is an efficient, multilingual, and adversarially-robust text vectorizer.
+ 0.0 | low       | google-research/nested-transformer | lang=Jupyter Notebook | stars=204 | updated=2026-04-23 | +[none] | -[image, vision] | Nested Hierarchical Transformer https://arxiv.org/pdf/2105.12723.pdf
+ 0.0 | low       | google-research/reassessed-imagenet | lang=unknown | stars=201 | updated=2026-04-19 | +[none] | -[image] | Labels and other data for the paper "Are we done with ImageNet?"
+ 0.0 | low       | google-research/turkish-morphology | lang=Python | stars=183 | updated=2026-05-11 | +[none] | -[nlp] | A two-level morphological analyzer for Turkish.
+ 0.0 | low       | google-research/slot-attention-video | lang=Python | stars=183 | updated=2026-05-13 | +[none] | -[video] | 
+ 0.0 | low       | google-research/hit-gan | lang=Python | stars=93 | updated=2026-04-19 | +[none] | -[vision] | Tensorflow implementation for "Improved Transformer for High-Resolution GANs" (NeurIPS 2021).
+ 0.0 | low       | google-research/valan | lang=Python | stars=85 | updated=2026-04-19 | +[none] | -[vision] | Vision and Language Agent Navigation
+ 0.0 | low       | google-research/jestimator | lang=Python | stars=83 | updated=2026-04-16 | +[none] | -[language model] | Amos optimizer with JEstimator lib.
+ 0.0 | low       | google-research/noise2music | lang=TeX | stars=57 | updated=2026-04-01 | +[none] | -[music] | 
+ 0.0 | low       | google-research/silc | lang=unknown | stars=48 | updated=2026-04-01 | +[none] | -[vision] | [ECCV 2024] Official Release of SILC: Improving vision language pretraining with self-distillation
+ 0.0 | low       | google-research/se3ds | lang=Jupyter Notebook | stars=42 | updated=2025-12-15 | +[none] | -[vision] | This repository hosts the code for our paper, "Simple and Effective Synthesis of Indoor 3D Scenes".
+ 0.0 | low       | google-research/dp-imagenet | lang=Python | stars=37 | updated=2026-04-19 | +[none] | -[image] | 
+ 0.0 | low       | google-research/fool-me-twice | lang=JavaScript | stars=33 | updated=2026-05-23 | +[none] | -[nlp] | Game code and data for Fool Me Twice: Entailment from Wikipedia Gamification https://arxiv.org/abs/2104.04725
+ 0.0 | low       | google-research/trecs_image_generation | lang=unknown | stars=24 | updated=2026-04-19 | +[none] | -[image] | 
+ 0.0 | weak      | google-research/pangea | lang=JavaScript | stars=19 | updated=2026-04-21 | +[graph] | -[nlp, text, vision, audio] | Panoramic Graph Environment Annotation toolkit, for collecting audio and text annotations in panoramic graph environments such as Matterport3D and StreetLearn.
+ 0.0 | low       | google-research/imagenet-mistakes | lang=Jupyter Notebook | stars=18 | updated=2026-04-19 | +[none] | -[image] | 
+ 0.0 | low       | google-research/protein-ligand-binding-free-energy-calculations | lang=Jupyter Notebook | stars=15 | updated=2026-01-21 | +[none] | -[protein] | 
+ 0.0 | low       | google-research/crosslingual-knowledge-barriers | lang=Python | stars=12 | updated=2026-04-19 | +[none] | -[language model] | Code for the paper "Crosslingual Capabilities and Knowledge Barriers in Multilingual Large Language Models".
+ 0.0 | low       | google-research/keyboard_oracle | lang=Dart | stars=11 | updated=2026-04-21 | +[none] | -[language model] | A dynamic 'keyboard' made using Flutter. The keyboard uses what the user has already typed to predict what is most likely to come next and displays these predictions as buttons.
+ 0.0 | low       | google-research/simfluence | lang=unknown | stars=8 | updated=2024-08-15 | +[none] | -[none] | 
+ 0.0 | low       | google-research/gestalt | lang=unknown | stars=6 | updated=2026-04-19 | +[none] | -[none] | 
+ 0.0 | low       | google-research/c3po | lang=JavaScript | stars=5 | updated=2025-10-28 | +[none] | -[none] | 
+ 0.0 | low       | google-research/searcho | lang=unknown | stars=4 | updated=2026-04-19 | +[none] | -[none] | 
+ 0.0 | low       | google-research/medical-research-foundations | lang=unknown | stars=3 | updated=2024-05-07 | +[none] | -[none] | 
+ 0.0 | low       | google-research/power-control | lang=unknown | stars=2 | updated=2024-01-01 | +[none] | -[none] | 
+ 0.0 | low       | google-research/citrus-nlp | lang=Python | stars=2 | updated=2023-05-15 | +[none] | -[nlp] | 
+ 0.0 | low       | google-research/.allstar | lang=unknown | stars=2 | updated=2024-02-08 | +[none] | -[none] | 
+ 0.0 | low       | google-research/.github | lang=unknown | stars=1 | updated=2023-12-28 | +[none] | -[none] | 
+
+Next manual review targets:
+1. Re-score shortlist with direct README/API examples and dependency checks.
+2. Separate candidates into analysis-only, predictor-plugin, evaluation, and visualization tracks.
+3. Add no dependency to the core app until a local walk-forward experiment proves improvement.

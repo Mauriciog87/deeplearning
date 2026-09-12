@@ -4,6 +4,7 @@ from enum import Enum
 import numpy as np
 from collections import Counter
 from scipy import stats as scipy_stats
+from .randomization import uniformity_test
 
 
 FAIR_PROBABILITY = 1 / 37  # 2.7027%
@@ -28,6 +29,7 @@ class ChiSquareResult:
     significance: BiasSignificance
     observed_frequencies: Dict[int, int]
     expected_frequency: float
+    method: str = 'chi-square asymptotic'
     
     @property
     def is_biased(self) -> bool:
@@ -83,16 +85,15 @@ def chi_square_formal_test(
         for i in range(37)
     )
     
-    p_value = 1 - scipy_stats.chi2.cdf(chi_sq, CHI_SQUARE_DF)
+    chi_sq, p_value, method = uniformity_test(numbers)
     critical_95 = scipy_stats.chi2.ppf(0.95, CHI_SQUARE_DF)  # ~50.998
     critical_99 = scipy_stats.chi2.ppf(0.99, CHI_SQUARE_DF)  # ~58.619
-    critical_999 = scipy_stats.chi2.ppf(0.999, CHI_SQUARE_DF)  # ~65.247
     
-    if chi_sq >= critical_999:
+    if p_value <= .001:
         significance = BiasSignificance.HIGHLY_SIGNIFICANT
-    elif chi_sq >= critical_99:
+    elif p_value <= .01:
         significance = BiasSignificance.SIGNIFICANT_99
-    elif chi_sq >= critical_95:
+    elif p_value <= .05:
         significance = BiasSignificance.SIGNIFICANT_95
     else:
         significance = BiasSignificance.NOT_SIGNIFICANT
@@ -105,7 +106,8 @@ def chi_square_formal_test(
         critical_99=critical_99,
         significance=significance,
         observed_frequencies=observed,
-        expected_frequency=expected
+        expected_frequency=expected,
+        method=method
     )
 
 

@@ -10,7 +10,7 @@ import numpy as np
 from collections import defaultdict
 
 from src.environment import RouletteEnv, RouletteEnvNearMissFlat
-from src.agents import HyperHeuristicAgent, LLHType
+from src.agents import HyperHeuristicAgent, DQNHyperHeuristic, LLHType
 
 
 def parse_args():
@@ -19,7 +19,7 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
-    parser.add_argument('--model', type=str, default='models/hh_agent_best.pkl',
+    parser.add_argument('--model', type=str, default='models/hh_agent_final.json',
                         help='Path to trained model')
     parser.add_argument('--episodes', type=int, default=100,
                         help='Number of test episodes')
@@ -27,13 +27,13 @@ def parse_args():
                         help='Maximum steps per episode')
     parser.add_argument('--initial-bankroll', type=float, default=1000.0,
                         help='Starting bankroll')
-    parser.add_argument('--base-bet', type=float, default=10.0,
+    parser.add_argument('--base-bet', type=float, default=1.0,
                         help='Base bet amount')
     parser.add_argument('--use-near-miss', action='store_true',
                         help='Use near-miss enhanced environment')
     parser.add_argument('--compare-random', action='store_true',
                         help='Compare with random agent')
-    parser.add_argument('--seed', type=int, default=None,
+    parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
     parser.add_argument('--verbose', type=int, default=1,
                         help='Verbosity level')
@@ -41,9 +41,9 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_episode(agent, env, max_steps, explore=False):
+def run_episode(agent, env, max_steps, explore=False, seed=42):
     """Run a single episode and return metrics."""
-    obs, info = env.reset()
+    obs, info = env.reset(seed=seed)
     agent.reset_episode()
     
     total_reward = 0.0
@@ -58,15 +58,13 @@ def run_episode(agent, env, max_steps, explore=False):
         
         llh_usage[llh] += 1
         
-        obs, reward, term, trunc, info = env.step(action)
-        outcome = info.get('winning_number', np.random.randint(0, 37))
+        obs, reward, term, trunc, info = env.step(action, stake=bet)
+        outcome = info['winning_number']
         
         llh_rewards[llh].append(reward)
         
         # Update agent state (but no learning during test)
-        agent.spin_history.append(outcome)
-        agent.reward_history.append(reward)
-        agent.bankroll += reward
+        agent.update(outcome, action, reward, learn=False, terminated=term, truncated=trunc)
         
         total_reward += reward
         if reward > 0:
@@ -89,16 +87,17 @@ def run_episode(agent, env, max_steps, explore=False):
     }
 
 
-def run_random_episode(env, max_steps, initial_bankroll, base_bet):
+def run_random_episode(env, max_steps, initial_bankroll, base_bet, seed=42):
     """Run episode with random action selection for comparison."""
-    obs, info = env.reset()
+    obs, info = env.reset(seed=seed)
+    rng = np.random.default_rng(seed)
     bankroll = initial_bankroll
     total_reward = 0.0
     wins = 0
     losses = 0
     
     for step in range(max_steps):
-        action = np.random.randint(0, 47)  # Random action
+        action = int(rng.choice(np.flatnonzero(env.get_action_mask())))
         
         obs, reward, term, trunc, info = env.step(action)
         bankroll += reward
@@ -147,6 +146,8 @@ def print_llh_analysis(all_results):
 
 
 def main():
+    from src.console import configure_console
+    configure_console()
     args = parse_args()
     
     if args.seed is not None:
@@ -158,18 +159,20 @@ def main():
         print("Please train an agent first with: python train_hh.py")
         return
     
-    agent = HyperHeuristicAgent.load(
+    agent_class = DQNHyperHeuristic if args.model.endswith('.pt') else HyperHeuristicAgent
+    agent = agent_class.load(
         args.model,
         initial_bankroll=args.initial_bankroll,
         base_bet=args.base_bet
     )
-    agent.epsilon = 0.0  # No exploration during testing
+    agent.initial_bankroll = args.initial_bankroll
+    agent.base_bet = args.base_bet
     
     # Create environment
     if args.use_near_miss:
-        env = RouletteEnvNearMissFlat(initial_bankroll=args.initial_bankroll)
+        env = RouletteEnvNearMissFlat(initial_bankroll=args.initial_bankroll, bet_size=args.base_bet, max_steps=args.max_steps)
     else:
-        env = RouletteEnv(initial_bankroll=args.initial_bankroll)
+        env = RouletteEnv(initial_bankroll=args.initial_bankroll, bet_size=args.base_bet, max_steps=args.max_steps)
     
     print("=" * 70)
     print("🎰 Hyper-Heuristic Agent Evaluation")
@@ -186,7 +189,7 @@ def main():
     all_results = []
     
     for ep in range(1, args.episodes + 1):
-        result = run_episode(agent, env, args.max_steps, explore=False)
+        result = run_episode(agent, env, args.max_steps, explore=False, seed=args.seed + ep)
         all_results.append(result)
         
         if args.verbose >= 2:
@@ -229,8 +232,8 @@ def main():
         print("-" * 70)
         
         random_results = []
-        for _ in range(args.episodes):
-            result = run_random_episode(env, args.max_steps, args.initial_bankroll, args.base_bet)
+        for ep in range(1, args.episodes + 1):
+            result = run_random_episode(env, args.max_steps, args.initial_bankroll, args.base_bet, seed=args.seed + ep)
             random_results.append(result)
         
         random_rewards = [r['reward'] for r in random_results]

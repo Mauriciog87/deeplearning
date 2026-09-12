@@ -15,6 +15,7 @@ import numpy as np
 import random
 from collections import deque
 from typing import Tuple, List, Optional, Dict, Any
+from ..checkpoints import atomic_save, load_checkpoint, capture_rng, restore_rng, SCHEMA_VERSION, OBSERVATION_VERSION
 
 
 class RouletteEmbedding(nn.Module):
@@ -191,10 +192,14 @@ class ReplayBuffer:
         reward: float,
         next_history: np.ndarray,
         next_gain: float,
-        done: bool
+        done: bool,
+        next_action_mask=None,
+        truncated: bool = False
     ):
         """Add a transition to the buffer."""
-        self.buffer.append((history, gain, action, reward, next_history, next_gain, done))
+        self.buffer.append((np.array(history, copy=True), float(gain), int(action), float(reward),
+                            np.array(next_history, copy=True), float(next_gain), bool(done),
+                            np.array(next_action_mask, dtype=bool, copy=True), bool(truncated)))
     
     def sample(self, batch_size: int) -> List[Tuple]:
         """Sample a batch of transitions."""
@@ -260,7 +265,9 @@ class DQNAgent:
         self.train_step = 0
         
         # Set device
-        if device is None:
+        if batch_size < 2:
+            raise ValueError('Batch size must be at least two for BatchNorm')
+        if device is None or device == 'auto':
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
@@ -325,6 +332,8 @@ class DQNAgent:
             Selected action
         """
         # Epsilon-greedy exploration
+        if action_mask is not None and (len(action_mask) != self.action_size or not np.any(action_mask)):
+            raise ValueError('Action mask must contain at least one valid action')
         if training and random.random() < self.epsilon:
             if action_mask is not None:
                 valid_actions = np.where(action_mask == 1)[0]
@@ -347,7 +356,7 @@ class DQNAgent:
             if action_mask is not None:
                 # Mask invalid actions with very negative value
                 mask_tensor = torch.FloatTensor(action_mask).to(self.device)
-                q_values = q_values + (1 - mask_tensor) * (-1e9)
+                q_values = q_values.masked_fill(~mask_tensor.bool(), -torch.inf)
             
             return q_values.argmax(dim=1).item()
     
@@ -359,10 +368,16 @@ class DQNAgent:
         reward: float,
         next_history: np.ndarray,
         next_gain: float,
-        done: bool
+        done: bool,
+        next_action_mask=None,
+        truncated: bool = False
     ):
         """Store a transition in the replay buffer."""
-        self.memory.push(history, gain, action, reward, next_history, next_gain, done)
+        if next_action_mask is None:
+            next_action_mask = np.ones(self.action_size, dtype=bool)
+        if len(next_action_mask) != self.action_size or not np.any(next_action_mask):
+            raise ValueError('Next action mask must contain at least one valid action')
+        self.memory.push(history, gain, action, reward, next_history, next_gain, done, next_action_mask, truncated)
     
     def train(self) -> Optional[float]:
         """
@@ -376,7 +391,7 @@ class DQNAgent:
         
         # Sample batch
         batch = self.memory.sample(self.batch_size)
-        histories, gains, actions, rewards, next_histories, next_gains, dones = zip(*batch)
+        histories, gains, actions, rewards, next_histories, next_gains, dones, next_masks, _ = zip(*batch)
         
         # Convert to tensors
         histories = torch.FloatTensor(np.array(histories)).to(self.device)
@@ -388,15 +403,20 @@ class DQNAgent:
         dones = torch.BoolTensor(dones).to(self.device)
         
         # Current Q values
+        self.q_network.train()
         current_q = self.q_network(histories, gains).gather(1, actions.unsqueeze(1)).squeeze()
         
         # Target Q values (Double DQN)
         with torch.no_grad():
             # Use online network to select actions
-            next_actions = self.q_network(next_histories, next_gains).argmax(dim=1)
+            self.q_network.eval()
+            next_values = self.q_network(next_histories, next_gains)
+            next_values.masked_fill_(~torch.as_tensor(np.array(next_masks), device=self.device), -torch.inf)
+            next_actions = next_values.argmax(dim=1)
             # Use target network to evaluate
             next_q = self.target_network(next_histories, next_gains).gather(1, next_actions.unsqueeze(1)).squeeze()
             target_q = rewards + (self.gamma * next_q * ~dones)
+        self.q_network.train()
         
         # Compute loss and update
         loss = self.criterion(current_q, target_q)
@@ -417,7 +437,7 @@ class DQNAgent:
         
         # Decay epsilon
         if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         
         return loss.item()
     
@@ -428,30 +448,37 @@ class DQNAgent:
     def save(self, path: str, extra_data: dict = None):
         """Save the agent's networks and state."""
         checkpoint = {
+            'schema_version': SCHEMA_VERSION,
+            'observation_version': OBSERVATION_VERSION,
+            'model_type': 'dqn',
             'q_network': self.q_network.state_dict(),
             'target_network': self.target_network.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'epsilon': self.epsilon,
             'train_step': self.train_step,
-            'config': self.config
+            'config': self.config,
+            'replay': list(self.memory.buffer),
+            'rng': capture_rng(),
+            'network_training': self.q_network.training,
+            'extra': extra_data or {}
         }
-        if extra_data:
-            checkpoint.update(extra_data)
-        torch.save(checkpoint, path)
+        atomic_save(path, checkpoint)
         print(f"Agent saved to {path}")
     
     def load(self, path: str) -> dict:
         """Load the agent's networks and state. Returns extra data if present."""
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        checkpoint = load_checkpoint(path, 'dqn', device=self.device)
+        self.__init__(**checkpoint['config'], device=str(self.device))
         self.q_network.load_state_dict(checkpoint['q_network'])
         self.target_network.load_state_dict(checkpoint['target_network'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.epsilon = checkpoint['epsilon']
         self.train_step = checkpoint['train_step']
-        if 'config' in checkpoint:
-            self.config = checkpoint['config']
+        self.memory.buffer.extend(checkpoint['replay'])
+        self.q_network.train(checkpoint['network_training'])
+        restore_rng(checkpoint['rng'])
         print(f"Agent loaded from {path}")
-        return checkpoint  # Return for extra_data access
+        return checkpoint['extra']
     
     def get_q_values(self, history: np.ndarray, gain: float) -> np.ndarray:
         """Get Q-values for all actions (for analysis)."""

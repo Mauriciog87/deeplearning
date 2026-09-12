@@ -111,16 +111,19 @@ class CaptureSession:
         print(f"\nCreated session: {name}")
         return True
     
-    def add_number(self, number: int):
+    def add_number(self, number: int, *, event_id=None, observed_at=None):
         if self.session_id is None:
             print("[ERROR] No session selected!")
             return
         
-        self.repo.db.add_spin(self.session_id, number)
+        spin = self.repo.db.add_spin(self.session_id, number, event_id=event_id, timestamp=observed_at)
         self.numbers_added += 1
+        return spin
 
 
 def main():
+    from src.console import configure_console
+    configure_console()
     print("=" * 50)
     print("ROULETTE SCREEN CAPTURE")
     print("=" * 50)
@@ -131,11 +134,18 @@ def main():
         print("No session selected. Exiting.")
         return
     
-    def on_number(number: int):
-        capture_session.add_number(number)
+    def on_number(number: int, **metadata):
+        spin = capture_session.add_number(number, **metadata)
         print(f">>> NUMBER {number} added to '{capture_session.session_name}' (total: {capture_session.numbers_added})")
+        return spin
+
+    def on_observation(observation):
+        capture_session.repo.db.record_capture_observation(
+            capture_session.session_id, observation.numbers, observation.confidence,
+            event_id=observation.event_id, observed_at=observation.observed_at,
+            status=observation.status, reason=observation.reason)
     
-    monitor = RouletteMonitor(on_number_detected=on_number)
+    monitor = RouletteMonitor(on_number_detected=on_number, on_observation=on_observation)
     
     existing_numbers = capture_session.repo.get_numbers_by_session(capture_session.session_id)
     monitor.set_session_numbers(existing_numbers)
@@ -224,8 +234,9 @@ def main():
                 print("Failed to capture. Make sure region is configured (option 1).")
         
         elif choice == "6":
+            monitor.stop()
             if capture_session.select_or_create_session():
-                monitor = RouletteMonitor(on_number_detected=on_number)
+                monitor = RouletteMonitor(on_number_detected=on_number, on_observation=on_observation)
                 existing_numbers = capture_session.repo.get_numbers_by_session(capture_session.session_id)
                 monitor.set_session_numbers(existing_numbers)
                 print(f"Loaded {len(existing_numbers)} existing numbers for reconciliation")

@@ -177,94 +177,237 @@ def session_list(args):
 
 
 def predict_mode(args):
-    from src.database import RouletteRepository, Prediction
-    from src.utils.predictor import RoulettePredictor
-    
+    from src.database import RouletteRepository
+    from src.engine.prediction_engine import PredictorType, PredictionEngine
+    from src.utils.evaluation_harness import (
+        LiveModelPrediction,
+        make_fair_prediction,
+        make_last_n_prediction,
+        make_rolling_frequency_prediction,
+    )
+
     repo = RouletteRepository()
-    
+
     session_id = args.session_id
     if session_id:
         session = repo.db.get_session(session_id)
         if not session:
-            print(f"❌ Sesión {session_id} no encontrada")
+            print(f"Sesion {session_id} no encontrada")
             return 1
         history = repo.get_numbers_by_session(session_id)
     else:
-        history = repo.get_all_numbers()
-    
-    if len(history) < 5:
-        print("❌ Se necesitan al menos 5 números para predecir")
+        print('Selecciona una sesion con --session para conservar el orden temporal.')
         return 1
-    
-    model_path = args.model or "models/roulette_agent.pt"
-    predictor = RoulettePredictor(model_path)
-    
-    print("\n🔮 Modo Predicción")
+
+    if len(history) < 1:
+        print("Se necesita al menos 1 numero para predecir")
+        return 1
+
+    engine = PredictionEngine(model_path=args.model)
+    engine.load_history(history, session_id=session_id)
+
+    bet_top_n = args.bet_top_n or 5
+    last_n = args.last_n or 18
+
+    print("\nModo Prediccion")
     print("=" * 60)
-    print(f"Historial: {len(history)} números")
-    print("Comandos: 'q' salir | 'p' nueva predicción | 'a' accuracy")
+    print(f"Historial: {len(history)} numeros")
+    print("Comandos: 'q' salir | 'p' nueva prediccion | 'a' accuracy")
     print("=" * 60)
-    
+
     while True:
         try:
-            predictions = predictor.predict_from_history(history)
-            
-            print(f"\n{'─' * 40}")
-            print("📊 PREDICCIÓN:")
-            print(predictor.format_prediction(predictions))
-            print(f"{'─' * 40}")
-            
-            user_input = input("\n🎲 Ingresá el número que salió (o comando): ").strip().lower()
-            
+            engine_predictions = engine.predict_all()
+            live_predictions = _build_live_predictions(
+                engine,
+                engine_predictions,
+                history,
+                bet_top_n,
+                last_n,
+                LiveModelPrediction,
+                PredictorType,
+                make_fair_prediction,
+                make_rolling_frequency_prediction,
+                make_last_n_prediction,
+            )
+
+            emitted = dict(engine_predictions)
+            consensus = engine.get_consensus_prediction(engine_predictions)
+            emitted[consensus.predictor] = consensus
+            for name, prediction in live_predictions.items():
+                if prediction is not None and name not in ('fair', 'consensus', 'bias'):
+                    emitted[name] = engine.prediction_from_probabilities(name, prediction.number_probs)
+            repo.db.emit_predictions(session_id, emitted, expected_count=len(history))
+            decision = engine.get_policy_decision()
+            print(f'DQN policy: {decision.action if decision.action is not None else decision.status.reason}')
+            print(f"\n{'-' * 60}")
+            print("PREDICCIONES:")
+            print(_format_live_predictions(live_predictions, bet_top_n))
+            if args.show_probs:
+                print(_format_live_probabilities(live_predictions))
+            print(f"{'-' * 60}")
+
+            user_input = input("\nIngresa el numero que salio (o comando): ").strip().lower()
+
             if user_input == 'q':
                 break
-            elif user_input == 'p':
+            if user_input == 'p':
                 continue
-            elif user_input == 'a':
+            if user_input == 'a':
                 accuracy = repo.get_prediction_accuracy(session_id)
                 if accuracy.get("total", 0) == 0:
-                    print("\n📈 No hay predicciones registradas aún")
+                    print("\nNo hay predicciones registradas aun")
                 else:
-                    print(f"\n📈 Precisión de predicciones ({accuracy['total']} total):")
-                    print(f"   Número exacto: {accuracy['number']['correct']}/{accuracy['total']} ({accuracy['number']['pct']:.1f}%)")
+                    print(f"\nPrecision registrada ({accuracy['total']} total):")
+                    print(f"   Numero exacto: {accuracy['number']['correct']}/{accuracy['total']} ({accuracy['number']['pct']:.1f}%)")
                     print(f"   Color: {accuracy['color']['correct']}/{accuracy['total']} ({accuracy['color']['pct']:.1f}%)")
                     print(f"   Paridad: {accuracy['parity']['correct']}/{accuracy['total']} ({accuracy['parity']['pct']:.1f}%)")
                     print(f"   Alto/Bajo: {accuracy['high_low']['correct']}/{accuracy['total']} ({accuracy['high_low']['pct']:.1f}%)")
                     print(f"   Docena: {accuracy['dozen']['correct']}/{accuracy['total']} ({accuracy['dozen']['pct']:.1f}%)")
                     print(f"   Columna: {accuracy['column']['correct']}/{accuracy['total']} ({accuracy['column']['pct']:.1f}%)")
                 continue
-            
+
             try:
                 actual = int(user_input)
-                if 0 <= actual <= 36:
-                    pred_obj = predictor.create_prediction_object(predictions, session_id or 0)
-                    pred_obj.actual_number = actual
-                    pred_obj.compute_correctness()
-                    
-                    if session_id:
-                        repo.add_number_to_session(session_id, actual)
-                        history.append(actual)
-                    
-                    repo.save_prediction(pred_obj)
-                    
-                    print(f"\n✅ Resultado: {format_spin_display(actual)}")
-                    print(f"\n📊 Aciertos:")
-                    print(f"   {'✅' if pred_obj.color_correct else '❌'} Color")
-                    print(f"   {'✅' if pred_obj.parity_correct else '❌'} Paridad")
-                    print(f"   {'✅' if pred_obj.high_low_correct else '❌'} Alto/Bajo")
-                    print(f"   {'✅' if pred_obj.dozen_correct else '❌'} Docena")
-                    print(f"   {'✅' if pred_obj.column_correct else '❌'} Columna")
-                    print(f"   {'✅' if predictions['number'][0] == actual else '❌'} Número exacto")
-                else:
-                    print("   ❌ Número inválido (debe ser 0-36)")
             except ValueError:
-                print("   ❌ Entrada inválida")
-        
+                print("Entrada invalida")
+                continue
+
+            if not 0 <= actual <= 36:
+                print("Numero invalido (debe ser 0-36)")
+                continue
+
+            if session_id:
+                repo.add_number_to_session(session_id, actual)
+
+            history.append(actual)
+            engine.add_number(actual)
+
+            print(f"\nResultado: {format_spin_display(actual)}")
+            print(_format_live_hits(live_predictions, actual, bet_top_n))
+
         except KeyboardInterrupt:
             print("\n")
             break
-    
+
     return 0
+
+
+def _build_live_predictions(
+    engine,
+    engine_predictions,
+    history,
+    bet_top_n,
+    last_n,
+    live_prediction_cls,
+    predictor_type_cls,
+    make_fair_prediction,
+    make_rolling_frequency_prediction,
+    make_last_n_prediction,
+):
+    predictions = {}
+
+    consensus = engine.get_consensus_prediction()
+    consensus_name = consensus.predictor.value if consensus is not None else "consensus"
+    predictions[consensus_name] = _live_prediction_from_full_prediction(
+        consensus_name,
+        consensus,
+        bet_top_n,
+        live_prediction_cls,
+    )
+    predictions["bias"] = _live_prediction_from_full_prediction(
+        "bias",
+        engine_predictions.get(predictor_type_cls.BIAS),
+        bet_top_n,
+        live_prediction_cls,
+    )
+    predictions["fair"] = make_fair_prediction(history, bet_top_n)
+    predictions["rolling_frequency"] = make_rolling_frequency_prediction(history, bet_top_n)
+    predictions["last_n"] = make_last_n_prediction(history, last_n, bet_top_n)
+
+    return predictions
+
+
+def _live_prediction_from_full_prediction(
+    model,
+    prediction,
+    bet_top_n,
+    live_prediction_cls,
+):
+    if prediction is None:
+        return None
+
+    number_probs = prediction.number.all_probabilities
+    top_numbers = prediction.top_numbers or sorted(
+        number_probs.items(),
+        key=lambda item: (-item[1], item[0]),
+    )[:bet_top_n]
+    predicted = int(prediction.number.value)
+    confidence = max(number_probs.values()) if number_probs else 0.0
+
+    return live_prediction_cls(
+        model=model,
+        predicted=predicted,
+        confidence=confidence,
+        top_numbers=top_numbers[:bet_top_n],
+        number_probs=number_probs,
+    )
+
+
+def _format_live_predictions(predictions, bet_top_n):
+    lines = [
+        f"{'model':<20} {'predicted':>9} {'conf':>8} top_numbers",
+        "-" * 60,
+    ]
+
+    for model, prediction in predictions.items():
+        if prediction is None:
+            lines.append(f"{model:<20} {'inactive':>9} {'-':>8} -")
+            continue
+
+        top_numbers = ", ".join(
+            f"{number}:{probability * 100:.1f}%"
+            for number, probability in prediction.top_numbers[:bet_top_n]
+        )
+        lines.append(
+            f"{model:<20} {prediction.predicted:>9} "
+            f"{prediction.confidence * 100:>7.2f}% {top_numbers}"
+        )
+
+    return "\n".join(lines)
+
+
+def _format_live_probabilities(predictions):
+    lines = ["", "Full probability distributions:"]
+
+    for model, prediction in predictions.items():
+        if prediction is None:
+            continue
+        probs = ", ".join(
+            f"{number}:{prediction.number_probs.get(number, 0.0) * 100:.2f}%"
+            for number in range(37)
+        )
+        lines.append(f"{model}: {probs}")
+
+    return "\n".join(lines)
+
+
+def _format_live_hits(predictions, actual, bet_top_n):
+    lines = ["", "Aciertos por modelo:"]
+
+    for model, prediction in predictions.items():
+        if prediction is None:
+            lines.append(f"   {model:<20} inactive")
+            continue
+
+        top_numbers = [number for number, _ in prediction.top_numbers[:bet_top_n]]
+        exact = "OK" if prediction.predicted == actual else "--"
+        top_hit = "OK" if actual in top_numbers else "--"
+        lines.append(
+            f"   {model:<20} exact={exact} top{bet_top_n}={top_hit}"
+        )
+
+    return "\n".join(lines)
 
 
 def show_accuracy(args):
@@ -593,18 +736,24 @@ def backtest_cmd(args):
     
     repo = RouletteRepository()
     
-    if args.session:
-        numbers = repo.get_numbers_by_session(args.session)
-    else:
-        numbers = repo.get_all_numbers()
+    if args.session is None:
+        from copy import copy
+        outcomes = []
+        for session in repo.get_sessions():
+            selected = copy(args)
+            selected.session = session['id']
+            print(f"Sesion {selected.session}")
+            outcomes.append(backtest_cmd(selected))
+        return 0 if outcomes and any(code == 0 for code in outcomes) else 1
+    numbers = repo.get_numbers_by_session(args.session)
     
     if len(numbers) < 200:
         print(f"❌ Se necesitan al menos 200 spins para backtesting (tiene {len(numbers)})")
         return 1
     
     strategy = args.strategy or "bias"
-    initial_balance = args.balance or 1000.0
-    bet_amount = args.bet or 1.0
+    initial_balance = args.balance
+    bet_amount = args.bet
     
     print(f"\n🎰 Backtesting - Estrategia: {strategy}")
     print(f"   Balance inicial: ${initial_balance:.2f}")
@@ -694,41 +843,130 @@ def metrics_cmd(args):
     return 0
 
 
-def evaluate_cmd(args):
+def heatmaps_cmd(args):
     from src.database import RouletteRepository
-    from src.utils.evaluation_harness import (
-        EvaluationConfig,
-        evaluate_walk_forward,
-        format_evaluation_report,
-    )
+    from src.utils.heatmaps import HeatmapConfig, generate_heatmap_report
 
     repo = RouletteRepository()
 
-    if args.session:
-        numbers = repo.get_numbers_by_session(args.session)
-    else:
-        numbers = repo.get_all_numbers()
+    if args.session is None:
+        from copy import copy
+        from pathlib import Path
+        outcomes = []
+        for session in repo.get_sessions():
+            selected = copy(args)
+            selected.session = session['id']
+            selected.output_dir = str(Path(args.output_dir) / f"session_{selected.session}")
+            outcomes.append(heatmaps_cmd(selected))
+        return 0 if outcomes and any(code == 0 for code in outcomes) else 1
+    numbers = repo.get_numbers_by_session(args.session)
+    source_label = f"session {args.session}"
 
-    config = EvaluationConfig(
-        training_window=args.train_window,
-        testing_window=args.test_window,
+    config = HeatmapConfig(
+        window_size=args.window_size,
         step_size=args.step,
-        bet_top_n=args.bet_top_n,
-        seed=args.seed,
-        model_path=args.model,
+        sector_count=args.sector_count,
+        output_dir=args.output_dir,
+        show=args.show,
+        z_threshold=args.z_threshold,
+        fdr_alpha=args.fdr_alpha,
+        include_anomalies=not args.no_anomalies,
     )
-    required = config.training_window + config.testing_window
+    session_numbers = None
+    if args.include_drift and not args.session:
+        session_numbers = {
+            f"{session['id']}:{session['name']}": repo.get_numbers_by_session(session["id"])
+            for session in repo.get_sessions()
+        }
 
-    if len(numbers) < required:
-        print(
-            f"Se necesitan al menos {required} spins para evaluate "
-            f"(tiene {len(numbers)})"
+    try:
+        result = generate_heatmap_report(
+            numbers,
+            config,
+            source_label=source_label,
+            session_numbers=session_numbers,
         )
+    except ValueError as error:
+        print(f"Heatmaps error: {error}")
         return 1
 
-    result = evaluate_walk_forward(numbers, config)
-    print(format_evaluation_report(result))
+    print(f"\nHeatmaps - {result.source_label}")
+    print("=" * 60)
+    print(f"Total spins: {result.total_spins}")
+    for name, path in result.output_paths.items():
+        print(f"{name}: {path}")
+    if result.anomalies:
+        print("\nTop anomalies:")
+        for anomaly in result.anomalies[:10]:
+            print(
+                f"- {anomaly.severity} {anomaly.window_label} "
+                f"{anomaly.feature}: z={anomaly.z_score:+.2f}, "
+                f"p={anomaly.p_value:.6f}, q={anomaly.q_value:.6f}, "
+                f"fdr={'yes' if anomaly.fdr_significant else 'no'}, "
+                f"observed={anomaly.observed_rate:.3f}, expected={anomaly.expected_rate:.3f}"
+            )
+    if result.drift_results:
+        print("\nLargest session drift:")
+        for drift in sorted(result.drift_results, key=lambda item: item.distance, reverse=True)[:5]:
+            print(f"- {drift.session_a} vs {drift.session_b}: {drift.distance:.4f}")
+    if result.warnings:
+        print("\nWarnings:")
+        for warning in result.warnings:
+            print(f"- {warning}")
     return 0
+
+
+def randomness_cmd(args):
+    from src.database import RouletteRepository
+    from src.utils.randomness import analyze_randomness, format_randomness_report
+
+    sessions = RouletteRepository().get_evaluation_sessions()
+    if args.session is not None:
+        sessions = [session for session in sessions if session.session_id == str(args.session)]
+    evaluated = 0
+    for session in sessions:
+        print(f'Sesion {session.session_id}: {len(session.numbers)} resultados')
+        if len(session.numbers) < args.min_spins:
+            print(f'Se necesitan al menos {args.min_spins} resultados por sesion.')
+            continue
+        report = analyze_randomness(
+            session.numbers, window_size=args.window_size, step_size=args.step,
+            alpha=args.alpha, markov_max_lag=args.markov_max_lag,
+            resamples=args.resamples, seed=args.seed, fdr_method=args.fdr_method,
+        )
+        print(format_randomness_report(report))
+        evaluated += 1
+    return 0 if evaluated else 1
+
+
+def evaluate_cmd(args):
+    from dataclasses import asdict
+    import json
+    from pathlib import Path
+    from src.database import RouletteRepository
+    from src.utils.evaluation_harness import EvaluationConfig, evaluate_walk_forward, format_evaluation_report
+
+    sessions = RouletteRepository().get_evaluation_sessions()
+    if args.session is not None:
+        sessions = [session for session in sessions if session.session_id == str(args.session)]
+    config = EvaluationConfig(
+        training_window=args.train_window, testing_window=args.test_window,
+        step_size=args.step, bet_top_n=args.bet_top_n, seed=args.seed, model_path=args.model,
+        ece_bins=args.ece_bins, bootstrap_resamples=args.bootstrap_resamples,
+        confidence_level=args.confidence_level, comparison_baseline=args.comparison_baseline,
+        compute_intervals=not args.no_intervals, runs=args.runs, lstm_epochs=args.epochs,
+        device=args.device, initial_bankroll=args.bankroll, unit_stake=args.unit_stake,
+        models=tuple(args.models) + (('dqn',) if args.model and 'dqn' not in args.models else ()),
+        block_length=args.block_length,
+    )
+    result = evaluate_walk_forward(sessions, config)
+    print(format_evaluation_report(result))
+    if args.output:
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(asdict(result), indent=2, allow_nan=False), encoding='utf-8')
+        print(f'Resultados y manifiesto: {output}')
+    return 0 if result.folds else 1
 
 
 def kelly_cmd(args):
@@ -836,6 +1074,8 @@ def statistics_cmd(args):
 
 
 def main():
+    from src.console import configure_console
+    configure_console()
     parser = argparse.ArgumentParser(
         description="RL Roulette - CLI de Gestión de Datos",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -849,6 +1089,7 @@ Ejemplos:
   python roulette_cli.py bias-test --session 1
   python roulette_cli.py backtest --strategy bias --walk-forward
   python roulette_cli.py metrics --session 1
+  python roulette_cli.py randomness --session 1
   python roulette_cli.py kelly --probability 0.035 --payout 35
   python roulette_cli.py statistics --session 1
         """
@@ -872,6 +1113,9 @@ Ejemplos:
     predict_parser = subparsers.add_parser('predict', help='Modo predicción')
     predict_parser.add_argument('--session', '-s', dest='session_id', type=int, help='ID de sesión')
     predict_parser.add_argument('--model', '-m', help='Ruta al modelo')
+    predict_parser.add_argument('--bet-top-n', type=int, default=5, help='Cantidad de números top a mostrar')
+    predict_parser.add_argument('--last-n', type=int, default=18, help='Ventana para baseline last_n')
+    predict_parser.add_argument('--show-probs', action='store_true', help='Mostrar distribuciones completas')
     
     accuracy_parser = subparsers.add_parser('accuracy', help='Ver precisión de predicciones')
     accuracy_parser.add_argument('--session', '-s', dest='session_id', type=int, help='ID de sesión')
@@ -908,7 +1152,7 @@ Ejemplos:
     
     backtest_parser = subparsers.add_parser('backtest', help='Backtesting de estrategias')
     backtest_parser.add_argument('--session', '-s', type=int, help='ID de sesión')
-    backtest_parser.add_argument('--strategy', choices=['bias', 'hot', 'cold', 'last-n'], default='bias', help='Estrategia')
+    backtest_parser.add_argument('--strategy', choices=['bias', 'hot', 'last-n'], default='bias', help='Estrategia')
     backtest_parser.add_argument('--balance', type=float, default=1000.0, help='Balance inicial')
     backtest_parser.add_argument('--bet', type=float, default=1.0, help='Monto por apuesta')
     backtest_parser.add_argument('--walk-forward', action='store_true', help='Usar walk-forward optimization')
@@ -919,6 +1163,29 @@ Ejemplos:
     metrics_parser.add_argument('--session', '-s', type=int, help='ID de sesión')
     metrics_parser.add_argument('--sigma', type=float, default=2.0, help='Umbral sigma para anomalías')
 
+    heatmaps_parser = subparsers.add_parser('heatmaps', help='Generar heatmaps PNG')
+    heatmaps_parser.add_argument('--session', '-s', type=int, help='ID de sesion')
+    heatmaps_parser.add_argument('--output-dir', default='reports/heatmaps', help='Directorio de salida')
+    heatmaps_parser.add_argument('--window-size', type=int, default=100, help='Tamano de ventana rolling')
+    heatmaps_parser.add_argument('--step', type=int, default=25, help='Paso entre ventanas rolling')
+    heatmaps_parser.add_argument('--sector-count', type=int, default=12, help='Cantidad de sectores de rueda')
+    heatmaps_parser.add_argument('--z-threshold', type=float, default=2.5, help='Umbral z-score para alertas')
+    heatmaps_parser.add_argument('--fdr-alpha', type=float, default=0.05, help='Alpha FDR para q-values de alertas')
+    heatmaps_parser.add_argument('--include-drift', action='store_true', help='Generar drift entre sesiones en modo global')
+    heatmaps_parser.add_argument('--no-anomalies', action='store_true', help='No generar resumen de anomalías')
+    heatmaps_parser.add_argument('--show', action='store_true', help='Mostrar figuras al generarlas')
+
+    randomness_parser = subparsers.add_parser('randomness', help='Tests de aleatoriedad e independencia')
+    randomness_parser.add_argument('--session', '-s', type=int, help='ID de sesion')
+    randomness_parser.add_argument('--window-size', type=int, default=100, help='Tamano de ventana para entropy drift')
+    randomness_parser.add_argument('--step', type=int, default=50, help='Paso entre ventanas')
+    randomness_parser.add_argument('--alpha', type=float, default=0.01, help='Nivel de significancia')
+    randomness_parser.add_argument('--min-spins', type=int, default=50, help='Minimo de spins requerido')
+    randomness_parser.add_argument('--resamples', type=int, default=9999)
+    randomness_parser.add_argument('--seed', type=int, default=42)
+    randomness_parser.add_argument('--fdr-method', choices=['by', 'bh'], default='by')
+    randomness_parser.add_argument('--markov-max-lag', type=int, default=3, help='Lag maximo para scan Markov')
+
     evaluate_parser = subparsers.add_parser('evaluate', help='Walk-forward evaluation del motor completo')
     evaluate_parser.add_argument('--session', '-s', type=int, help='ID de sesión')
     evaluate_parser.add_argument('--train-window', type=int, default=500, help='Ventana de entrenamiento')
@@ -927,6 +1194,19 @@ Ejemplos:
     evaluate_parser.add_argument('--bet-top-n', type=int, default=5, help='Cantidad de números apostados por predicción')
     evaluate_parser.add_argument('--seed', type=int, default=42, help='Seed para baseline random')
     evaluate_parser.add_argument('--model', help='Path opcional a modelo DQN')
+    evaluate_parser.add_argument('--ece-bins', type=int, default=10, help='Bins para calibracion')
+    evaluate_parser.add_argument('--bootstrap-resamples', type=int, default=2000, help='Remuestreos bootstrap')
+    evaluate_parser.add_argument('--confidence-level', type=float, default=0.95, help='Nivel de confianza para intervalos')
+    evaluate_parser.add_argument('--comparison-baseline', default='fair', help='Baseline para comparacion pareada')
+    evaluate_parser.add_argument('--runs', type=int, default=5)
+    evaluate_parser.add_argument('--epochs', type=int, default=30)
+    evaluate_parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
+    evaluate_parser.add_argument('--bankroll', type=float, default=1000.0)
+    evaluate_parser.add_argument('--unit-stake', type=float, default=1.0)
+    evaluate_parser.add_argument('--models', nargs='*', choices=['lstm', 'extra_trees', 'bias', 'dqn'], default=['lstm', 'extra_trees', 'bias'])
+    evaluate_parser.add_argument('--block-length', type=int)
+    evaluate_parser.add_argument('--output', help='Archivo JSON con resultados, filas y manifiesto')
+    evaluate_parser.add_argument('--no-intervals', action='store_true', help='Desactivar intervalos bootstrap')
     
     kelly_parser = subparsers.add_parser('kelly', help='Calculadora Kelly Criterion')
     kelly_parser.add_argument('--probability', '-p', type=float, required=True, help='Probabilidad de ganar (0-1)')
@@ -977,6 +1257,10 @@ Ejemplos:
         return backtest_cmd(args)
     elif args.command == 'metrics':
         return metrics_cmd(args)
+    elif args.command == 'heatmaps':
+        return heatmaps_cmd(args)
+    elif args.command == 'randomness':
+        return randomness_cmd(args)
     elif args.command == 'evaluate':
         return evaluate_cmd(args)
     elif args.command == 'kelly':

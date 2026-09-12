@@ -12,7 +12,7 @@ Enhanced environment with:
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import random
+from ..settlement import settle_bet, validate_number, validate_stake, settle_action
 from typing import Optional, Tuple, Dict, Any, List
 from dataclasses import dataclass
 
@@ -112,13 +112,13 @@ class RouletteEnv(gym.Env):
     def __init__(
         self,
         initial_bankroll: float = 1000.0,
-        bet_size: float = 50.0,
+        bet_size: float = 1.0,
         max_steps: int = 80,
         win_target: float = 2000.0,
         history_size: int = 20,
         render_mode: Optional[str] = None,
         real_data: Optional[List[int]] = None,
-        use_physics_sim: bool = True
+        use_physics_sim: bool = False
     ):
         """
         Initialize the Roulette environment.
@@ -134,6 +134,11 @@ class RouletteEnv(gym.Env):
             use_physics_sim: Whether to use physics simulation (ignored if real_data provided)
         """
         super().__init__()
+        if initial_bankroll <= 0 or not np.isfinite(initial_bankroll):
+            raise ValueError('Initial bankroll must be positive and finite')
+        validate_stake(bet_size, initial_bankroll)
+        if bet_size == 0 or max_steps < 1 or history_size < 1:
+            raise ValueError('Bet size, max steps and history size must be positive')
         
         self.initial_bankroll = initial_bankroll
         self.bet_size = bet_size
@@ -144,8 +149,9 @@ class RouletteEnv(gym.Env):
         self.use_physics_sim = use_physics_sim
         
         # Real data support
-        self.real_data = real_data
+        self.real_data = None if real_data is None else [validate_number(n) for n in real_data]
         self.real_data_index = 0
+        self._episode_done = True
         
         # Action space: 47 discrete actions
         self.action_space = spaces.Discrete(self.NUM_ACTIONS)
@@ -162,7 +168,7 @@ class RouletteEnv(gym.Env):
                 low=0, high=36, shape=(history_size,), dtype=np.int32
             ),
             "gain": spaces.Box(
-                low=0, high=10, shape=(1,), dtype=np.float32
+                low=0, high=np.inf, shape=(1,), dtype=np.float32
             )
         })
         
@@ -170,7 +176,7 @@ class RouletteEnv(gym.Env):
         self.bankroll = initial_bankroll
         self.history = []
         self.current_step = 0
-        self.last_pos = random.randint(0, 36)
+        self.last_pos = 0
         self.counter_clockwise = True
         
     def _build_action_info(self):
@@ -220,17 +226,17 @@ class RouletteEnv(gym.Env):
         Uses real data if available, otherwise simulates.
         """
         # Use real data if available
-        if self.real_data is not None and len(self.real_data) > 0:
+        if self.real_data is not None:
             if self.real_data_index >= len(self.real_data):
-                self.real_data_index = 0  # Loop back
+                raise RuntimeError('Real data exhausted; reset with a valid segment')
             number = self.real_data[self.real_data_index]
             self.real_data_index += 1
             return number
         
         # Physics simulation
         if self.use_physics_sim:
-            rand_strength = random.randint(350, 500)
-            rand_shift = random.randint(6, 12)
+            rand_strength = int(self.np_random.integers(350, 501))
+            rand_shift = int(self.np_random.integers(6, 13))
             
             if self.counter_clockwise:
                 run_ball = self.last_pos + rand_shift - rand_strength
@@ -242,7 +248,7 @@ class RouletteEnv(gym.Env):
             return self.last_pos
         
         # Pure random
-        return random.randint(0, 36)
+        return int(self.np_random.integers(0, 37))
     
     def _get_color(self, number: int) -> str:
         """Get the color of a roulette number."""
@@ -253,7 +259,7 @@ class RouletteEnv(gym.Env):
         else:
             return "green"
     
-    def _calculate_reward(self, action: int, winning_number: int) -> float:
+    def _calculate_reward(self, action: int, winning_number: int, stake: Optional[float] = None) -> float:
         """
         Calculate the reward based on action and winning number.
         
@@ -261,15 +267,9 @@ class RouletteEnv(gym.Env):
         """
         action_info = self.actions[action]
         
-        # PASS action
-        if action == self.ACTION_PASS:
-            return 0.0
-        
-        # Check if won
-        if winning_number in action_info.winning_numbers:
-            return self.bet_size * action_info.payout
-        else:
-            return -self.bet_size
+        return settle_bet(winning_number, action_info.winning_numbers,
+                          self.bet_size if stake is None else stake, self.bankroll,
+                          payout=action_info.payout, separate_straights=False).net_profit
     
     def _get_observation(self) -> Dict[str, np.ndarray]:
         """Get the current observation."""
@@ -298,12 +298,22 @@ class RouletteEnv(gym.Env):
         
         self.bankroll = self.initial_bankroll
         self.current_step = 0
-        self.last_pos = random.randint(0, 36)
+        self.last_pos = int(self.np_random.integers(0, 37))
         self.counter_clockwise = True
+        self.action_space.seed(seed)
+        self._episode_done = False
         
         # Reset real data index if using real data
-        if options and options.get("reset_data_index", False):
-            self.real_data_index = 0
+        options = options or {}
+        self.real_data_index = int(options.get('start_index', 0))
+        if self.real_data is not None:
+            remaining = len(self.real_data) - self.history_size
+            if remaining < 1:
+                raise ValueError('Real data requires history plus at least one outcome')
+            if options.get('random_start', False):
+                self.real_data_index = int(self.np_random.integers(0, remaining))
+            if not 0 <= self.real_data_index < remaining:
+                raise ValueError('Start index does not leave history and an outcome')
         
         # Pre-fill history with spins
         self.history = []
@@ -318,7 +328,7 @@ class RouletteEnv(gym.Env):
         
         return self._get_observation(), info
     
-    def step(self, action: int) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
+    def step(self, action: int, *, stake: Optional[float] = None) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         """
         Take a step in the environment.
         
@@ -328,6 +338,16 @@ class RouletteEnv(gym.Env):
         Returns:
             observation, reward, terminated, truncated, info
         """
+        if self._episode_done:
+            raise RuntimeError('Episode ended; call reset before stepping')
+        if not self.action_space.contains(action):
+            raise ValueError(f'Invalid action: {action!r}')
+        effective_stake = self.bet_size if stake is None else float(stake)
+        if action == self.ACTION_PASS:
+            effective_stake = 0.0
+        elif effective_stake <= 0:
+            raise ValueError('A betting action requires a positive stake')
+        validate_stake(effective_stake, self.bankroll)
         self.current_step += 1
         
         # Spin the wheel
@@ -335,8 +355,10 @@ class RouletteEnv(gym.Env):
         self.history.append(winning_number)
         
         # Calculate reward
-        reward = self._calculate_reward(action, winning_number)
-        self.bankroll += reward
+        action_info = self.actions[action]
+        settlement = settle_action(winning_number, action, effective_stake, self.bankroll)
+        reward = settlement.net_profit
+        self.bankroll = settlement.balance_after
         
         # Check termination conditions
         terminated = False
@@ -344,11 +366,13 @@ class RouletteEnv(gym.Env):
         
         if self.bankroll <= 0:
             terminated = True
-            self.bankroll = 0
         elif self.bankroll >= self.win_target:
             terminated = True
         elif self.current_step >= self.max_steps:
             truncated = True
+        if self.real_data is not None and self.real_data_index >= len(self.real_data):
+            truncated = True
+        self._episode_done = terminated or truncated
         
         # Get action info
         action_info = self.actions[action]
@@ -362,7 +386,11 @@ class RouletteEnv(gym.Env):
             "action_type": action_info.bet_type,
             "bet_won": winning_number in action_info.winning_numbers if action != self.ACTION_PASS else None,
             "step": self.current_step,
-            "net_reward": reward
+            "net_reward": reward,
+            "total_stake": settlement.total_stake,
+            "balance_before": settlement.balance_before,
+            "balance_after": settlement.balance_after,
+            "action_mask": self.get_action_mask()
         }
         
         return self._get_observation(), reward, terminated, truncated, info
@@ -387,10 +415,7 @@ class RouletteEnv(gym.Env):
             numbers: List of roulette numbers (0-36)
             start_index: Starting index in the data
         """
-        for n in numbers:
-            if not 0 <= n <= 36:
-                raise ValueError(f"Invalid roulette number: {n}")
-        self.real_data = numbers
+        self.real_data = [validate_number(n) for n in numbers]
         self.real_data_index = start_index
     
     def get_action_mask(self) -> np.ndarray:
@@ -423,7 +448,7 @@ class RouletteEnvFlat(RouletteEnv):
         # Override observation space to be flat
         self.observation_space = spaces.Box(
             low=0, 
-            high=36,  # Gain will be scaled
+            high=np.array([36] * self.history_size + [np.inf], dtype=np.float32),
             shape=(self.history_size + 1,), 
             dtype=np.float32
         )
@@ -434,19 +459,19 @@ class RouletteEnvFlat(RouletteEnv):
         
         # Concatenate history and gain
         # Scale gain to be in similar range as numbers
-        scaled_gain = obs_dict["gain"][0] * 18  # Scale 0-2 to 0-36 range
+        scaled_gain = obs_dict["gain"][0]
         
         return np.concatenate([
             obs_dict["history"].astype(np.float32),
             [scaled_gain]
-        ])
+        ]).astype(np.float32)
     
     def reset(self, **kwargs):
         obs, info = super().reset(**kwargs)
         return self._get_observation(), info
     
-    def step(self, action):
-        obs, reward, terminated, truncated, info = super().step(action)
+    def step(self, action, *, stake=None):
+        obs, reward, terminated, truncated, info = super().step(action, stake=stake)
         return self._get_observation(), reward, terminated, truncated, info
 
 
@@ -502,7 +527,7 @@ class RouletteEnvNearMiss(RouletteEnv):
                 low=0, high=36, shape=(self.history_size,), dtype=np.int32
             ),
             "gain": spaces.Box(
-                low=0, high=10, shape=(1,), dtype=np.float32
+                low=0, high=np.inf, shape=(1,), dtype=np.float32
             ),
             "near_miss_zone": spaces.Box(
                 low=0, high=1, shape=(self.NEAR_MISS_ZONE_SIZE,), dtype=np.float32
@@ -582,12 +607,12 @@ class RouletteEnvNearMiss(RouletteEnv):
             "sector_frequencies": sector_freq.astype(np.float32)
         }
     
-    def step(self, action: int) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
+    def step(self, action: int, *, stake: Optional[float] = None) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         """
         Take a step with near-miss tracking.
         """
         # Get winning number before step
-        obs, reward, terminated, truncated, info = super().step(action)
+        obs, reward, terminated, truncated, info = super().step(action, stake=stake)
         
         # Track near-miss for straight bets
         winning_number = info["winning_number"]
@@ -638,7 +663,7 @@ class RouletteEnvNearMissFlat(RouletteEnvNearMiss):
         
         self.observation_space = spaces.Box(
             low=-1,  # Some features can be negative (sin/cos)
-            high=37,  # History values go up to 36
+            high=np.array([36] * self.history_size + [np.inf] + [1] * (obs_size - self.history_size - 1), dtype=np.float32),
             shape=(obs_size,),
             dtype=np.float32
         )
@@ -659,8 +684,8 @@ class RouletteEnvNearMissFlat(RouletteEnvNearMiss):
         obs_dict, info = RouletteEnvNearMiss.reset(self, **kwargs)
         return self._get_observation(), info
     
-    def step(self, action):
-        obs_dict, reward, terminated, truncated, info = RouletteEnvNearMiss.step(self, action)
+    def step(self, action, *, stake=None):
+        obs_dict, reward, terminated, truncated, info = RouletteEnvNearMiss.step(self, action, stake=stake)
         return self._get_observation(), reward, terminated, truncated, info
 
 

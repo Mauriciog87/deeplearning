@@ -34,22 +34,9 @@ from src.agents.dqn_agent import DQNAgent
 from src.utils.visualization import plot_comparison, plot_episode_details
 
 
-def get_real_data(session_id: int = None) -> list:
-    """Load real roulette data from database."""
-    try:
-        from src.database import RouletteRepository
-        
-        repo = RouletteRepository()
-        
-        if session_id:
-            numbers = repo.get_numbers_by_session(session_id)
-        else:
-            numbers = repo.get_all_numbers()
-        
-        return numbers
-    except Exception as e:
-        print(f"❌ Error loading data: {e}")
-        return []
+from train import get_real_data
+from src.datasets import held_out_segments
+from src.checkpoints import seed_everything
 
 
 def test_agent(
@@ -62,7 +49,9 @@ def test_agent(
     initial_bankroll: float = 1000.0,
     use_flat_env: bool = False,
     show_episode: bool = False,
-    agent_name: str = "Trained Agent"
+    agent_name: str = "Trained Agent",
+    seed: int = 42,
+    device: str = "auto"
 ) -> dict:
     """
     Test a trained DQN agent.
@@ -82,6 +71,9 @@ def test_agent(
     Returns:
         Dictionary with test results
     """
+    if not model_path or not os.path.isfile(model_path):
+        raise FileNotFoundError(f"Trained model not found: {model_path}")
+    device = seed_everything(seed, device)
     # Create environment
     if use_flat_env:
         env = RouletteEnvFlat(
@@ -96,9 +88,6 @@ def test_agent(
             initial_bankroll=initial_bankroll
         )
     
-    # Set real data if available
-    if use_real_data and real_numbers:
-        env.set_real_data(real_numbers)
     
     action_size = env.action_space.n
     
@@ -106,21 +95,20 @@ def test_agent(
     agent = DQNAgent(
         history_size=20,
         embedding_dim=64,
-        action_size=action_size
+        action_size=action_size,
+        device=device
     )
     
-    # Load model
-    if model_path and os.path.exists(model_path):
-        agent.load(model_path)
-        if verbose:
-            print(f"✅ Loaded model: {model_path}")
-    elif model_path:
-        if verbose:
-            print(f"⚠️ No model found at {model_path}, using untrained agent")
-    
-    # Set to evaluation mode (no exploration)
-    agent.epsilon = 0
-    
+    checkpoint = agent.load(model_path)
+    partition = checkpoint.get('training_config', {}).get('partition')
+    segments = []
+    if use_real_data:
+        if partition is None:
+            raise ValueError('Checkpoint has no reserved real-data test partition')
+        segments = held_out_segments(real_numbers, partition)
+        episodes = len(segments)
+    env.bet_size = checkpoint.get('training_config', {}).get('unit_stake', env.bet_size)
+
     # Test metrics
     all_rewards = []
     all_steps = []
@@ -148,7 +136,9 @@ def test_agent(
     pbar = tqdm(range(episodes), desc=f"Testing", disable=not verbose)
     
     for episode in pbar:
-        obs, info = env.reset()
+        if use_real_data:
+            env.set_real_data(segments[episode])
+        obs, info = env.reset(seed=seed + episode)
         
         # Extract history and gain
         if use_flat_env:
@@ -167,7 +157,7 @@ def test_agent(
             sample_bankrolls.append(info['bankroll'])
         
         while not done:
-            action = agent.act(history, gain, training=False)
+            action = agent.act(history, gain, training=False, action_mask=env.get_action_mask())
             action_counts[action] += 1
             
             next_obs, reward, terminated, truncated, info = env.step(action)
@@ -205,6 +195,8 @@ def test_agent(
     
     # Calculate results
     results = {
+        'partition': partition,
+        'unit_stake': env.bet_size,
         'agent_name': agent_name,
         'episodes': episodes,
         'total_reward': sum(all_rewards),
@@ -254,7 +246,10 @@ def test_random_agent(
     real_numbers: list = None,
     max_spins: int = 100,
     initial_bankroll: float = 1000.0,
-    verbose: bool = True
+    verbose: bool = True,
+    seed: int = 42,
+    partition=None,
+    unit_stake: float = 50.0
 ) -> dict:
     """Test a random agent as baseline."""
     env = RouletteEnv(
@@ -263,8 +258,13 @@ def test_random_agent(
         initial_bankroll=initial_bankroll
     )
     
-    if use_real_data and real_numbers:
-        env.set_real_data(real_numbers)
+    segments = []
+    env.bet_size = unit_stake
+    if use_real_data:
+        if partition is None:
+            raise ValueError('Random comparison requires the same held-out partition')
+        segments = held_out_segments(real_numbers, partition)
+        episodes = len(segments)
     
     all_rewards = []
     wins = 0
@@ -278,7 +278,7 @@ def test_random_agent(
         done = False
         
         while not done:
-            action = env.action_space.sample()
+            action = env.action_space.sample(mask=env.get_action_mask().astype(np.int8))
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             episode_reward += reward
@@ -352,6 +352,8 @@ def analyze_real_data():
 
 
 def main():
+    from src.console import configure_console
+    configure_console()
     parser = argparse.ArgumentParser(
         description="Test RL Roulette agent",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -418,6 +420,8 @@ def main():
         help="Suppress output"
     )
     
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
     args = parser.parse_args()
     
     print("\n" + "="*60)
@@ -434,11 +438,7 @@ def main():
     real_numbers = None
     if args.use_real_data:
         real_numbers = get_real_data(args.session_id)
-        if not real_numbers:
-            print("⚠️ No real data available, using simulated")
-            args.use_real_data = False
-        else:
-            print(f"📊 Loaded {len(real_numbers)} real spins")
+        print(f"Loaded {len(real_numbers)} real sessions")
     
     all_results = {}
     
@@ -453,7 +453,7 @@ def main():
         initial_bankroll=args.initial_bankroll,
         use_flat_env=args.flat_env,
         show_episode=args.show_episode,
-        agent_name="Trained Agent"
+        agent_name="Trained Agent", seed=args.seed, device=args.device
     )
     all_results['trained'] = results
     
@@ -465,7 +465,8 @@ def main():
             real_numbers=real_numbers,
             max_spins=args.max_spins,
             initial_bankroll=args.initial_bankroll,
-            verbose=not args.quiet
+            verbose=not args.quiet, seed=args.seed,
+            partition=results.get('partition'), unit_stake=results['unit_stake']
         )
         all_results['random'] = random_results
         

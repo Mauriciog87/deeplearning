@@ -14,8 +14,6 @@ import os
 import numpy as np
 from collections import defaultdict
 from typing import Dict, List, Any, Optional
-import warnings
-warnings.filterwarnings('ignore')
 
 from src.environment import RouletteEnv
 from src.agents import (
@@ -44,9 +42,10 @@ def parse_args():
                         help='Path to DQN model')
     parser.add_argument('--fuzzy-model', type=str, default='models/fuzzy_agent.pt',
                         help='Path to Fuzzy DQN model')
-    parser.add_argument('--hh-model', type=str, default='models/hh_agent_best.pkl',
+    parser.add_argument('--hh-model', type=str, default='models/hh_agent_final.json',
                         help='Path to HH agent model')
     
+    parser.add_argument('--base-bet', type=float, default=1.0)
     return parser.parse_args()
 
 
@@ -60,41 +59,38 @@ class AgentWrapper:
         self.kwargs = kwargs
         self.bankroll = kwargs.get('initial_bankroll', 1000.0)
         self.initial_bankroll = self.bankroll
+        self.rng = np.random.default_rng(kwargs.get('seed', 42))
+        self.stake = kwargs.get('base_bet', 1.0)
     
     def reset(self):
         self.bankroll = self.initial_bankroll
         if self.agent_type == 'hh' and self.agent:
             self.agent.reset_episode()
     
-    def select_action(self, obs, history: List[int]) -> int:
+    def select_action(self, obs, history: List[int], action_mask):
+        if self.agent_type == 'pass':
+            return 46, 0.0
         if self.agent_type == 'random':
-            return np.random.randint(0, 47)
-        
+            action = int(self.rng.choice(np.flatnonzero(action_mask)))
         elif self.agent_type == 'behavioral':
-            return self.agent.select_action(
-                history, 
-                self.bankroll, 
-                history[-1] if history else None
-            )
-        
-        elif self.agent_type == 'dqn':
-            import torch
-            with torch.no_grad():
-                return self.agent.select_action(obs, explore=False)
-        
+            action = int(self.agent.select_action(history, self.bankroll, history[-1] if history else None))
+        elif self.agent_type in ('dqn', 'fuzzy'):
+            decision = self.agent.act(np.asarray(history[-20:]), self.bankroll / self.initial_bankroll,
+                                      training=False, action_mask=action_mask)
+            action = decision[0] if isinstance(decision, tuple) else decision
         elif self.agent_type == 'hh':
-            self.agent.select_llh(explore=False)
-            action, _ = self.agent.select_action(explore=False)
-            return action
-        
-        return np.random.randint(0, 47)
-    
-    def update(self, outcome: int, action: int, reward: float):
+            action, stake = self.agent.select_action(explore=False)
+            return action, stake
+        else:
+            raise ValueError(f'Unknown agent type: {self.agent_type}')
+        if not action_mask[action]:
+            return 46, 0.0
+        return action, 0.0 if action == 46 else self.stake
+
+    def update(self, outcome: int, action: int, reward: float, terminated=False, truncated=False):
         self.bankroll += reward
         if self.agent_type == 'hh' and self.agent:
-            self.agent.spin_history.append(outcome)
-            self.agent.reward_history.append(reward)
-            self.agent.bankroll = self.bankroll
+            self.agent.update(outcome, action, reward, learn=False, terminated=terminated, truncated=truncated)
 
 
 def create_agents(args) -> List[AgentWrapper]:
@@ -103,7 +99,7 @@ def create_agents(args) -> List[AgentWrapper]:
     
     # 1. Random Agent (baseline)
     agents.append(AgentWrapper(
-        "Random", "random",
+        "Random", "random", seed=args.seed,
         initial_bankroll=args.initial_bankroll
     ))
     
@@ -137,13 +133,8 @@ def create_agents(args) -> List[AgentWrapper]:
                 action_size=47,
                 hidden_size=128
             )
-            checkpoint = torch.load(args.dqn_model, map_location='cpu')
-            if isinstance(checkpoint, dict) and 'q_network_state_dict' in checkpoint:
-                dqn.q_network.load_state_dict(checkpoint['q_network_state_dict'])
-            else:
-                dqn.q_network.load_state_dict(checkpoint)
-            dqn.q_network.eval()
-            
+            dqn.load(args.dqn_model)
+
             agents.append(AgentWrapper(
                 "DQN Agent", "dqn",
                 agent=dqn,
@@ -157,24 +148,12 @@ def create_agents(args) -> List[AgentWrapper]:
     if os.path.exists(args.fuzzy_model):
         try:
             import torch
-            from src.agents import FuzzyAdaptiveDQN
-            
-            fuzzy = FuzzyAdaptiveDQN(
-                history_size=20,
-                action_size=47,
-                hidden_size=128
-            )
-            checkpoint = torch.load(args.fuzzy_model, map_location='cpu')
-            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                fuzzy.q_network.load_state_dict(checkpoint['model_state_dict'])
-            elif isinstance(checkpoint, dict) and 'q_network_state_dict' in checkpoint:
-                fuzzy.q_network.load_state_dict(checkpoint['q_network_state_dict'])
-            else:
-                fuzzy.q_network.load_state_dict(checkpoint)
-            fuzzy.q_network.eval()
-            
+            from src.agents import FuzzyAdaptiveDQN, DQNAgent
+            fuzzy = FuzzyAdaptiveDQN(DQNAgent())
+            fuzzy.load(args.fuzzy_model)
+
             agents.append(AgentWrapper(
-                "Fuzzy DQN", "dqn",
+                "Fuzzy DQN", "fuzzy",
                 agent=fuzzy,
                 initial_bankroll=args.initial_bankroll
             ))
@@ -191,7 +170,8 @@ def create_agents(args) -> List[AgentWrapper]:
                 args.hh_model,
                 initial_bankroll=args.initial_bankroll
             )
-            hh_agent.epsilon = 0.0
+            hh_agent.initial_bankroll = args.initial_bankroll
+            hh_agent.base_bet = args.base_bet
             
             agents.append(AgentWrapper(
                 "Hyper-Heuristic", "hh",
@@ -202,12 +182,18 @@ def create_agents(args) -> List[AgentWrapper]:
         except Exception as e:
             print(f"⚠️ Could not load HH model: {e}")
     
+    for name, path in (('DQN', args.dqn_model), ('Fuzzy DQN', args.fuzzy_model), ('HH', args.hh_model)):
+        if not os.path.exists(path):
+            print(f'{name}: unavailable; checkpoint not found: {path}')
+    agents.append(AgentWrapper('PASS', 'pass', initial_bankroll=args.initial_bankroll))
+    for wrapper in agents:
+        wrapper.stake = args.base_bet
     return agents
 
 
-def run_episode(agent: AgentWrapper, env, max_steps: int) -> Dict[str, Any]:
+def run_episode(agent: AgentWrapper, env, max_steps: int, seed: int = 42) -> Dict[str, Any]:
     """Run a single episode for an agent."""
-    obs, info = env.reset()
+    obs, info = env.reset(seed=seed)
     agent.reset()
     
     history = list(obs['history']) if isinstance(obs, dict) else []
@@ -216,12 +202,12 @@ def run_episode(agent: AgentWrapper, env, max_steps: int) -> Dict[str, Any]:
     losses = 0
     
     for step in range(max_steps):
-        action = agent.select_action(obs, history)
+        action, stake = agent.select_action(obs, history, env.get_action_mask())
         
-        obs, reward, term, trunc, info = env.step(action)
-        outcome = info.get('winning_number', np.random.randint(0, 37))
+        obs, reward, term, trunc, info = env.step(action, stake=stake)
+        outcome = info['winning_number']
         
-        agent.update(outcome, action, reward)
+        agent.update(outcome, action, reward, term, trunc)
         
         history.append(outcome)
         if len(history) > 20:
@@ -248,7 +234,7 @@ def run_episode(agent: AgentWrapper, env, max_steps: int) -> Dict[str, Any]:
 
 def run_comparison(agents: List[AgentWrapper], args) -> Dict[str, List[Dict]]:
     """Run comparison across all agents."""
-    env = RouletteEnv(initial_bankroll=args.initial_bankroll)
+    env = RouletteEnv(initial_bankroll=args.initial_bankroll, bet_size=args.base_bet, max_steps=args.max_steps)
     
     results = {agent.name: [] for agent in agents}
     
@@ -257,7 +243,7 @@ def run_comparison(agents: List[AgentWrapper], args) -> Dict[str, List[Dict]]:
             print(f"  Running episode {ep}/{args.episodes}...")
         
         for agent in agents:
-            result = run_episode(agent, env, args.max_steps)
+            result = run_episode(agent, env, args.max_steps, seed=args.seed + ep)
             results[agent.name].append(result)
     
     return results
@@ -329,6 +315,8 @@ def print_results(results: Dict[str, List[Dict]], args):
 
 
 def main():
+    from src.console import configure_console
+    configure_console()
     args = parse_args()
     np.random.seed(args.seed)
     

@@ -10,9 +10,10 @@ The agent learns WHICH strategy to use WHEN, adapting to game state.
 import numpy as np
 from enum import Enum, auto
 from typing import List, Dict, Tuple, Optional, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 import random
+from ..checkpoints import atomic_save, load_checkpoint, capture_rng, restore_rng, SCHEMA_VERSION, OBSERVATION_VERSION
 
 
 class LLHType(Enum):
@@ -98,7 +99,7 @@ class LowLevelHeuristic:
     
     def get_bet_amount(self, bankroll: float, base_bet: float) -> float:
         """Get bet amount. Override for progressive systems."""
-        return min(base_bet, bankroll)
+        return base_bet
 
 
 class HotNumbersLLH(LowLevelHeuristic):
@@ -186,7 +187,7 @@ class MartingaleLLH(LowLevelHeuristic):
     
     def get_bet_amount(self, bankroll: float, base_bet: float) -> float:
         amount = base_bet * self.current_multiplier
-        return min(amount, bankroll)
+        return amount
     
     def update_history(self, outcome: int, bet_action: int, reward: float):
         super().update_history(outcome, bet_action, reward)
@@ -212,7 +213,7 @@ class AntiMartingaleLLH(LowLevelHeuristic):
     
     def get_bet_amount(self, bankroll: float, base_bet: float) -> float:
         amount = base_bet * self.current_multiplier
-        return min(amount, bankroll)
+        return amount
     
     def update_history(self, outcome: int, bet_action: int, reward: float):
         super().update_history(outcome, bet_action, reward)
@@ -245,7 +246,7 @@ class FibonacciLLH(LowLevelHeuristic):
     
     def get_bet_amount(self, bankroll: float, base_bet: float) -> float:
         multiplier = self.FIB_SEQUENCE[min(self.fib_index, len(self.FIB_SEQUENCE) - 1)]
-        return min(base_bet * multiplier, bankroll)
+        return base_bet * multiplier
     
     def update_history(self, outcome: int, bet_action: int, reward: float):
         super().update_history(outcome, bet_action, reward)
@@ -266,7 +267,7 @@ class DAlembertLLH(LowLevelHeuristic):
         return self.rng.integers(0, 37)
     
     def get_bet_amount(self, bankroll: float, base_bet: float) -> float:
-        return min(base_bet * self.current_units, bankroll)
+        return base_bet * self.current_units
     
     def update_history(self, outcome: int, bet_action: int, reward: float):
         super().update_history(outcome, bet_action, reward)
@@ -313,7 +314,7 @@ class HyperHeuristicAgent:
         epsilon_end: float = 0.05,
         epsilon_decay: float = 0.995,
         initial_bankroll: float = 1000.0,
-        base_bet: float = 10.0,
+        base_bet: float = 1.0,
         seed: Optional[int] = None
     ):
         self.lr = learning_rate
@@ -422,7 +423,7 @@ class HyperHeuristicAgent:
             selected = self.rng.choice(list(LLHType))
         else:
             # Greedy: select LLH with highest Q-value
-            q_values = self.q_table[state_key]
+            q_values = self.q_table.get(state_key, {llh: 0.0 for llh in LLHType})
             max_q = max(q_values.values())
             best_llhs = [llh for llh, q in q_values.items() if q == max_q]
             selected = self.rng.choice(best_llhs)
@@ -440,14 +441,17 @@ class HyperHeuristicAgent:
         """
         if self.current_llh is None:
             self.select_llh(explore)
+        self.current_hh_state = self._compute_hh_state()
         
         llh = self.llhs[self.current_llh]
         action = llh.select_action(self.bankroll, self.base_bet)
         bet_amount = llh.get_bet_amount(self.bankroll, self.base_bet)
         
-        return action, bet_amount
+        if action == 46 or bet_amount > self.bankroll or bet_amount <= 0:
+            return 46, 0.0
+        return int(action), float(bet_amount)
     
-    def update(self, outcome: int, action: int, reward: float):
+    def update(self, outcome: int, action: int, reward: float, *, learn: bool = True, terminated: bool = False, truncated: bool = False):
         """
         Update after observing the result of a spin.
         
@@ -486,23 +490,31 @@ class HyperHeuristicAgent:
                 self.losses += 1
             
             # Update the LLH's internal state
-            self.llhs[self.current_llh].update_history(outcome, action, reward)
+            if action != 46:
+                self.llhs[self.current_llh].update_history(outcome, action, reward)
+            else:
+                llh = self.llhs[self.current_llh]
+                llh.history = (llh.history + [outcome])[-100:]
+        for llh_type, llh in self.llhs.items():
+            if llh_type != self.current_llh:
+                llh.history = (llh.history + [outcome])[-100:]
         
         # Q-Learning update
         old_state_key = self.current_hh_state.to_tuple()
         new_state = self._compute_hh_state()
         new_state_key = new_state.to_tuple()
         
-        if self.current_llh:
+        if learn and self.current_llh and not isinstance(self, DQNHyperHeuristic):
             old_q = self.q_table[old_state_key][self.current_llh]
-            max_next_q = max(self.q_table[new_state_key].values())
+            max_next_q = 0.0 if terminated else max(self.q_table[new_state_key].values())
             
             # Q-Learning update rule
             new_q = old_q + self.lr * (reward + self.gamma * max_next_q - old_q)
             self.q_table[old_state_key][self.current_llh] = new_q
         
         # Decay epsilon
-        self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+        if learn:
+            self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         
         self.total_steps += 1
         
@@ -512,8 +524,9 @@ class HyperHeuristicAgent:
             (self.current_llh and self.llh_states[self.current_llh].consecutive_losses >= 3)
         )
         
-        if should_switch:
-            self.select_llh(explore=True)
+        if should_switch and not (terminated or truncated):
+            self.select_llh(explore=learn)
+        return new_state
     
     def set_bias_detected(self, detected: bool, hot_numbers: Optional[List[int]] = None):
         """Set bias detection flag and optionally update hot numbers LLH."""
@@ -524,13 +537,15 @@ class HyperHeuristicAgent:
         """Reset for a new episode."""
         self.bankroll = self.initial_bankroll
         self.reward_history.clear()
+        self.spin_history.clear()
         self.current_llh = None
+        self.current_hh_state = HHState()
         self.total_episodes += 1
         
         # Reset progressive betting systems
-        for llh in [LLHType.MARTINGALE, LLHType.ANTI_MARTINGALE, 
-                    LLHType.FIBONACCI, LLHType.DALEMBERT]:
-            self.llhs[llh] = type(self.llhs[llh])(seed=self.rng.integers(0, 10000))
+        for llh_type, llh in self.llhs.items():
+            config = {key: getattr(llh, key) for key in ('window', 'sector_size') if hasattr(llh, key)}
+            self.llhs[llh_type] = type(llh)(seed=int(self.rng.integers(0, 10000)), **config)
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get agent statistics."""
@@ -561,50 +576,75 @@ class HyperHeuristicAgent:
             state = self._compute_hh_state()
         
         state_key = state.to_tuple()
-        q_values = self.q_table[state_key]
+        q_values = self.q_table.get(state_key, {llh: 0.0 for llh in LLHType})
         return max(q_values, key=q_values.get)
     
     def save(self, filepath: str):
         """Save the agent to a file."""
-        import pickle
-        
+        neural = isinstance(self, DQNHyperHeuristic)
         state = {
-            'q_table': dict(self.q_table),
-            'llh_states': self.llh_states,
-            'epsilon': self.epsilon,
-            'total_episodes': self.total_episodes,
-            'total_steps': self.total_steps,
-            'wins': self.wins,
-            'losses': self.losses,
-            'lr': self.lr,
-            'gamma': self.gamma,
-            'epsilon_end': self.epsilon_end,
-            'epsilon_decay': self.epsilon_decay,
+            'schema_version': SCHEMA_VERSION,
+            'observation_version': OBSERVATION_VERSION,
+            'model_type': 'dqn_hh' if neural else 'tabular_hh',
+            'attributes': {name: getattr(self, name) for name in (
+                'epsilon', 'total_episodes', 'total_steps', 'wins', 'losses', 'lr', 'gamma',
+                'epsilon_end', 'epsilon_decay', 'initial_bankroll', 'bankroll', 'base_bet',
+                'spin_history', 'reward_history', 'bias_detected')},
+            'q_table': [[list(key), {llh.name: value for llh, value in row.items()}]
+                        for key, row in self.q_table.items()],
+            'llh_states': {key.name: asdict(value) for key, value in self.llh_states.items()},
+            'llhs': {key.name: {'attributes': {name: value for name, value in vars(llh).items() if name != 'rng'},
+                               'rng': llh.rng.bit_generator.state} for key, llh in self.llhs.items()},
+            'current_llh': self.current_llh.name if self.current_llh else None,
+            'current_hh_state': asdict(self.current_hh_state),
+            'llh_selection_history': [llh.name for llh in self.llh_selection_history],
+            'rng': self.rng.bit_generator.state,
+            'global_rng': capture_rng(include_torch=neural),
+            'extra': getattr(self, 'extra', {}),
         }
-        
-        with open(filepath, 'wb') as f:
-            pickle.dump(state, f)
+        if neural:
+            state['network'] = {
+                'config': self.network_config,
+                'online': self.q_network.state_dict(), 'target': self.target_network.state_dict(),
+                'optimizer': self.optimizer.state_dict(),
+                'replay': [[asdict(s), a, r, asdict(ns), done] for s, a, r, ns, done in self.replay_buffer],
+                'buffer_size': self.buffer_size, 'batch_size': self.batch_size,
+                'update_target_every': self.update_target_every,
+            }
+        atomic_save(filepath, state, neural=neural)
     
     @classmethod
     def load(cls, filepath: str, **kwargs) -> 'HyperHeuristicAgent':
         """Load an agent from a file."""
-        import pickle
-        
-        with open(filepath, 'rb') as f:
-            state = pickle.load(f)
-        
-        agent = cls(**kwargs)
-        agent.q_table = defaultdict(
-            lambda: {llh: 0.0 for llh in LLHType},
-            state['q_table']
-        )
-        agent.llh_states = state['llh_states']
-        agent.epsilon = state['epsilon']
-        agent.total_episodes = state['total_episodes']
-        agent.total_steps = state['total_steps']
-        agent.wins = state['wins']
-        agent.losses = state['losses']
-        
+        neural = issubclass(cls, DQNHyperHeuristic)
+        state = load_checkpoint(filepath, 'dqn_hh' if neural else 'tabular_hh', neural=neural)
+        config = state['network']['config'] if neural else {}
+        agent = cls(**(config | kwargs))
+        for key, value in state['attributes'].items():
+            setattr(agent, key, value)
+        agent.q_table.update({tuple(key): {LLHType[name]: value for name, value in row.items()}
+                              for key, row in state['q_table']})
+        agent.llh_states = {LLHType[key]: LLHState(**value) for key, value in state['llh_states'].items()}
+        for key, value in state['llhs'].items():
+            llh = agent.llhs[LLHType[key]]
+            for name, attribute in value['attributes'].items():
+                setattr(llh, name, attribute)
+            llh.rng.bit_generator.state = value['rng']
+        agent.current_llh = LLHType[state['current_llh']] if state['current_llh'] else None
+        agent.current_hh_state = HHState(**state['current_hh_state'])
+        agent.llh_selection_history = [LLHType[name] for name in state['llh_selection_history']]
+        agent.rng.bit_generator.state = state['rng']
+        agent.extra = state['extra']
+        if neural:
+            network = state['network']
+            agent.q_network.load_state_dict(network['online'])
+            agent.target_network.load_state_dict(network['target'])
+            agent.optimizer.load_state_dict(network['optimizer'])
+            agent.replay_buffer = [(HHState(**s), a, r, HHState(**ns), done)
+                                   for s, a, r, ns, done in network['replay']]
+            for name in ('buffer_size', 'batch_size', 'update_target_every'):
+                setattr(agent, name, network[name])
+        restore_rng(state['global_rng'])
         return agent
 
 
@@ -621,16 +661,20 @@ class DQNHyperHeuristic(HyperHeuristicAgent):
         state_dim: int = 5,
         hidden_dim: int = 64,
         learning_rate: float = 0.001,
+        device: str = 'auto',
         **kwargs
     ):
         super().__init__(**kwargs)
+        self.network_config = {'state_dim': state_dim, 'hidden_dim': hidden_dim, 'learning_rate': learning_rate}
         
         try:
             import torch
             import torch.nn as nn
             import torch.optim as optim
             
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            if device == 'cuda' and not torch.cuda.is_available():
+                raise RuntimeError('CUDA was requested but is unavailable')
+            self.device = torch.device(('cuda' if torch.cuda.is_available() else 'cpu') if device == 'auto' else device)
             
             n_actions = len(LLHType)
             
@@ -665,8 +709,7 @@ class DQNHyperHeuristic(HyperHeuristicAgent):
             self.torch_available = True
             
         except ImportError:
-            self.torch_available = False
-            print("Warning: PyTorch not available. DQNHyperHeuristic will use Q-table.")
+            raise ImportError('DQN hyper-heuristic requires the ML dependencies') from None
     
     def _state_to_tensor(self, state: HHState):
         """Convert HHState to tensor."""
@@ -703,25 +746,26 @@ class DQNHyperHeuristic(HyperHeuristicAgent):
         self.llh_selection_history.append(self.current_llh)
         return self.current_llh
     
-    def update(self, outcome: int, action: int, reward: float):
+    def update(self, outcome: int, action: int, reward: float, *, learn: bool = True, terminated: bool = False, truncated: bool = False):
         """Update with experience replay for DQN."""
         if not self.torch_available:
             return super().update(outcome, action, reward)
         
         import torch
         
-        old_state = self._compute_hh_state()
+        old_state = self.current_hh_state
+        executed_llh = self.current_llh
         
         # Call parent update for history and stats
-        super().update(outcome, action, reward)
-        
-        new_state = self._compute_hh_state()
+        new_state = super().update(outcome, action, reward, learn=learn, terminated=terminated, truncated=truncated)
+        if not learn:
+            return new_state
         
         # Store experience
-        if self.current_llh:
-            llh_idx = list(LLHType).index(self.current_llh)
+        if executed_llh:
+            llh_idx = list(LLHType).index(executed_llh)
             self.replay_buffer.append((
-                old_state, llh_idx, reward, new_state
+                old_state, llh_idx, reward, new_state, terminated
             ))
             
             if len(self.replay_buffer) > self.buffer_size:
@@ -743,10 +787,11 @@ class DQNHyperHeuristic(HyperHeuristicAgent):
         batch_indices = self.rng.choice(len(self.replay_buffer), self.batch_size, replace=False)
         batch = [self.replay_buffer[i] for i in batch_indices]
         
-        states = torch.stack([self._state_to_tensor(s).squeeze() for s, _, _, _ in batch])
-        actions = torch.LongTensor([a for _, a, _, _ in batch]).to(self.device)
-        rewards = torch.FloatTensor([r for _, _, r, _ in batch]).to(self.device)
-        next_states = torch.stack([self._state_to_tensor(ns).squeeze() for _, _, _, ns in batch])
+        states = torch.stack([self._state_to_tensor(s).squeeze() for s, _, _, _, _ in batch])
+        actions = torch.LongTensor([a for _, a, _, _, _ in batch]).to(self.device)
+        rewards = torch.FloatTensor([r for _, _, r, _, _ in batch]).to(self.device)
+        next_states = torch.stack([self._state_to_tensor(ns).squeeze() for _, _, _, ns, _ in batch])
+        terminated = torch.BoolTensor([done for _, _, _, _, done in batch]).to(self.device)
         
         # Current Q values
         current_q = self.q_network(states).gather(1, actions.unsqueeze(1)).squeeze()
@@ -754,10 +799,11 @@ class DQNHyperHeuristic(HyperHeuristicAgent):
         # Target Q values
         with torch.no_grad():
             next_q = self.target_network(next_states).max(1)[0]
-            target_q = rewards + self.gamma * next_q
+            target_q = rewards + self.gamma * next_q * ~terminated
         
         # Update
         loss = self.loss_fn(current_q, target_q)
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1.0)
         self.optimizer.step()

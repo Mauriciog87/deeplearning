@@ -9,6 +9,8 @@ from typing import List, Tuple, Optional, Dict, Any
 from datetime import datetime
 
 from src.database.models import Database, Session, Spin, Prediction
+from src.datasets import EvaluationSession
+from src.settlement import validate_number
 
 
 class RouletteRepository:
@@ -30,13 +32,30 @@ class RouletteRepository:
     
     def get_numbers_by_session(self, session_id: int) -> List[int]:
         """Get all numbers for a specific session."""
-        spins = self.db.get_spins(session_id=session_id)
-        return [s.number for s in spins]
+        return self.db.get_all_numbers(session_id)
     
     def get_all_numbers(self) -> List[int]:
         """Get all numbers from all sessions."""
-        spins = self.db.get_spins()  # Gets all spins when session_id is None
-        return [s.number for s in spins]
+        return self.db.get_all_numbers()
+
+    def get_evaluation_sessions(self, session_id=None):
+        with self.db.transaction() as connection:
+            query = '''SELECT s.id AS session_id, s.source, sp.id AS spin_id, sp.number
+                       FROM sessions s LEFT JOIN spins sp ON sp.session_id=s.id'''
+            parameters = ()
+            if session_id is not None:
+                query += ' WHERE s.id=?'
+                parameters = (session_id,)
+            query += ' ORDER BY s.id, sp.timestamp, sp.id'
+            records = connection.execute(query, parameters).fetchall()
+        grouped = {}
+        for record in records:
+            item = grouped.setdefault(record['session_id'], {'numbers': [], 'ids': [], 'source': record['source']})
+            if record['spin_id'] is not None:
+                item['numbers'].append(record['number'])
+                item['ids'].append(str(record['spin_id']))
+        return [EvaluationSession(str(key), tuple(item['numbers']), tuple(item['ids']), item['source'])
+                for key, item in grouped.items()]
     
     # ==================== Data Ingestion ====================
     
@@ -64,8 +83,13 @@ class RouletteRepository:
         if name is None:
             name = f"Session {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
-        session = self.db.create_session(name, source, casino, notes)
-        self.db.add_spins_bulk(session.id, numbers)
+        numbers = [validate_number(number) for number in numbers]
+        with self.db.transaction() as connection:
+            cursor = connection.execute('INSERT INTO sessions(name, source, casino, notes) VALUES (?, ?, ?, ?)',
+                                        (name, source, casino, notes))
+            session = Session(id=cursor.lastrowid, name=name, source=source, casino=casino, notes=notes)
+            for number in numbers:
+                self.db._insert_spin(connection, session.id, number)
         
         return session
     
@@ -134,23 +158,17 @@ class RouletteRepository:
         Returns:
             (sequences, targets) arrays or just sequences if include_target=False
         """
-        numbers = self.db.get_all_numbers(session_id)
-        
-        if len(numbers) < sequence_length + 1:
-            raise ValueError(
-                f"Not enough data: need at least {sequence_length + 1} spins, "
-                f"have {len(numbers)}"
-            )
-        
-        sequences = []
-        targets = []
-        
-        for i in range(len(numbers) - sequence_length):
-            seq = numbers[i:i + sequence_length]
-            sequences.append(seq)
-            if include_target:
-                targets.append(numbers[i + sequence_length])
-        
+        if sequence_length < 1:
+            raise ValueError('Sequence length must be positive')
+        sequences, targets = [], []
+        for session in self.get_evaluation_sessions(session_id):
+            for i in range(len(session.numbers) - sequence_length):
+                sequences.append(session.numbers[i:i + sequence_length])
+                if include_target:
+                    targets.append(session.numbers[i + sequence_length])
+        if not sequences:
+            raise ValueError('No session has enough observations for a training sequence')
+
         X = np.array(sequences, dtype=np.int32)
         
         if include_target:
@@ -173,42 +191,13 @@ class RouletteRepository:
             - prev_colors: (N, seq_len) array of color encodings
             - prev_dozens: (N, seq_len) array of dozen encodings
         """
-        numbers = self.db.get_all_numbers(session_id)
-        
-        if len(numbers) < sequence_length + 1:
-            raise ValueError(f"Not enough data")
-        
-        red_numbers = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
-        
-        def get_color(n):
-            if n == 0:
-                return 0  # green
-            return 1 if n in red_numbers else 2  # red=1, black=2
-        
-        def get_dozen(n):
-            if n == 0:
-                return 0
-            return (n - 1) // 12 + 1
-        
-        sequences = []
-        targets = []
-        colors = []
-        dozens = []
-        
-        for i in range(len(numbers) - sequence_length):
-            seq = numbers[i:i + sequence_length]
-            sequences.append(seq)
-            targets.append(numbers[i + sequence_length])
-            colors.append([get_color(n) for n in seq])
-            dozens.append([get_dozen(n) for n in seq])
-        
+        sequences, targets = self.get_training_sequences(session_id, sequence_length)
         return {
-            "sequences": np.array(sequences, dtype=np.int32),
-            "targets": np.array(targets, dtype=np.int32),
-            "colors": np.array(colors, dtype=np.int32),
-            "dozens": np.array(dozens, dtype=np.int32)
+            'sequences': sequences, 'targets': targets,
+            'colors': np.asarray([[0 if n == 0 else 1 if n in Spin.RED_NUMBERS else 2 for n in seq] for seq in sequences], dtype=np.int32),
+            'dozens': np.asarray([[0 if n == 0 else (n - 1) // 12 + 1 for n in seq] for seq in sequences], dtype=np.int32),
         }
-    
+
     # ==================== Statistics & Analysis ====================
     
     def compute_transition_matrix(self, session_id: int = None) -> np.ndarray:
@@ -218,18 +207,13 @@ class RouletteRepository:
         Returns:
             37x37 matrix of transition probabilities
         """
-        numbers = self.db.get_all_numbers(session_id)
-        
-        if len(numbers) < 2:
-            raise ValueError("Need at least 2 spins for transition matrix")
-        
-        # Count transitions
         counts = np.zeros((37, 37), dtype=np.float32)
-        for i in range(len(numbers) - 1):
-            current = numbers[i]
-            next_num = numbers[i + 1]
-            counts[current, next_num] += 1
-        
+        for session in self.get_evaluation_sessions(session_id):
+            for current, next_number in zip(session.numbers, session.numbers[1:]):
+                counts[current, next_number] += 1
+        if not counts.sum():
+            raise ValueError('Need at least two observations within one session')
+
         # Normalize to probabilities
         row_sums = counts.sum(axis=1, keepdims=True)
         row_sums[row_sums == 0] = 1  # Avoid division by zero

@@ -34,35 +34,16 @@ from src.environment.roulette_env import RouletteEnv, RouletteEnvFlat
 from src.agents.dqn_agent import DQNAgent
 from src.agents.fuzzy_adaptive import FuzzyAdaptiveDQN, FuzzyEpsilonController
 from src.utils.visualization import plot_training_results
+from src.checkpoints import seed_everything
+from src.datasets import training_partition
 
 
 def get_real_data(session_id: int = None, min_spins: int = 100) -> list:
-    """Load real roulette data from database."""
-    try:
-        from src.database import RouletteRepository
-        
-        repo = RouletteRepository()
-        
-        if session_id:
-            # Get specific session
-            numbers = repo.get_numbers_by_session(session_id)
-            print(f"📊 Loaded {len(numbers)} spins from session {session_id}")
-        else:
-            # Get all numbers
-            numbers = repo.get_all_numbers()
-            print(f"📊 Loaded {len(numbers)} total spins from database")
-        
-        if len(numbers) < min_spins:
-            print(f"⚠️ Warning: Only {len(numbers)} spins available (minimum recommended: {min_spins})")
-        
-        return numbers
-    
-    except ImportError:
-        print("❌ Database module not available")
-        return []
-    except Exception as e:
-        print(f"❌ Error loading data: {e}")
-        return []
+    from src.database import RouletteRepository
+    sessions = RouletteRepository().get_evaluation_sessions(session_id)
+    if not sessions or not any(session.numbers for session in sessions):
+        raise ValueError('No real observations are available')
+    return sessions
 
 
 def train_agent(
@@ -87,6 +68,9 @@ def train_agent(
     use_flat_env: bool = False,
     use_fuzzy_adaptive: bool = False,
     fuzzy_adjustment_rate: float = 0.1,
+    seed: int = 42,
+    device: str = 'auto',
+    unit_stake: float = 1.0,
 ) -> dict:
     """
     Train a DQN agent for roulette.
@@ -116,25 +100,36 @@ def train_agent(
     Returns:
         Dictionary with training results
     """
+    device = seed_everything(seed, device)
+    if use_real_data and not real_numbers:
+        raise ValueError('Real data was requested but no observations were supplied')
+    os.makedirs(save_dir, exist_ok=True)
     # Create environment
     if use_flat_env:
         env = RouletteEnvFlat(
             history_size=20,
             max_steps=max_spins,
-            initial_bankroll=initial_bankroll
+            initial_bankroll=initial_bankroll,
+            bet_size=unit_stake
         )
         observation_type = "flat"
     else:
         env = RouletteEnv(
             history_size=20,
             max_steps=max_spins,
-            initial_bankroll=initial_bankroll
+            initial_bankroll=initial_bankroll,
+            bet_size=unit_stake
         )
         observation_type = "dict"
     
-    # Set real data if available
-    if use_real_data and real_numbers:
-        env.set_real_data(real_numbers)
+    partition = None
+    segments = []
+    if use_real_data:
+        segments, partition = training_partition(real_numbers, env.history_size)
+        env.set_real_data(segments[0])
+    training_config = {'seed': seed, 'unit_stake': unit_stake, 'max_spins': max_spins,
+                       'initial_bankroll': initial_bankroll, 'observation': 'history-gain-ratio-v2',
+                       'data_source': 'real' if use_real_data else 'simulated', 'partition': partition}
     
     action_size = env.action_space.n  # 47 actions
     
@@ -166,7 +161,8 @@ def train_agent(
         epsilon_decay=epsilon_decay,
         batch_size=batch_size,
         buffer_size=buffer_size,
-        target_update_freq=target_update_freq
+        target_update_freq=target_update_freq,
+        device=device
     )
     
     # Wrap with fuzzy adaptive controller if requested
@@ -190,8 +186,10 @@ def train_agent(
     all_epsilons = []
     all_fuzzy_metrics = []  # For fuzzy adaptive tracking
     
-    if resume_path and os.path.exists(resume_path):
+    if resume_path:
         checkpoint = agent.load(resume_path)
+        if checkpoint.get('training_config') != training_config:
+            raise ValueError('Resume configuration or dataset differs from the checkpoint')
         if checkpoint and 'episode' in checkpoint:
             start_episode = checkpoint['episode']
             all_rewards = checkpoint.get('rewards', [])
@@ -203,7 +201,9 @@ def train_agent(
     pbar = tqdm(range(start_episode, start_episode + episodes), desc="Training", disable=not verbose)
     
     for episode in pbar:
-        obs, info = env.reset()
+        if use_real_data:
+            env.set_real_data(segments[episode % len(segments)])
+        obs, info = env.reset(seed=seed + episode, options={'random_start': use_real_data})
         
         # Extract history and gain from observation
         if use_flat_env:
@@ -223,9 +223,9 @@ def train_agent(
         while not done:
             # Select action (fuzzy adaptive returns tuple with q_values)
             if use_fuzzy_adaptive:
-                action, q_values = agent.act(history, gain, training=True)
+                action, q_values = agent.act(history, gain, training=True, action_mask=env.get_action_mask())
             else:
-                action = agent.act(history, gain, training=True)
+                action = agent.act(history, gain, training=True, action_mask=env.get_action_mask())
                 q_values = None
             
             # Take step
@@ -242,9 +242,11 @@ def train_agent(
             
             # Store transition (fuzzy adaptive needs q_values)
             if use_fuzzy_adaptive:
-                agent.remember(history, gain, action, reward, next_history, next_gain, done, q_values)
+                agent.remember(history, gain, action, reward, next_history, next_gain, terminated, q_values,
+                               next_action_mask=env.get_action_mask(), truncated=truncated)
             else:
-                agent.remember(history, gain, action, reward, next_history, next_gain, done)
+                agent.remember(history, gain, action, reward, next_history, next_gain, terminated,
+                               next_action_mask=env.get_action_mask(), truncated=truncated)
             
             # Train
             loss = agent.train()
@@ -288,6 +290,7 @@ def train_agent(
         if (episode + 1) % 100 == 0:
             checkpoint_path = os.path.join(save_dir, f"{model_name}_checkpoint.pt")
             agent.save(checkpoint_path, extra_data={
+                'training_config': training_config,
                 'episode': episode + 1,
                 'rewards': all_rewards,
                 'losses': all_losses,
@@ -299,6 +302,7 @@ def train_agent(
     model_path = os.path.join(save_dir, f"{model_name}.pt")
     
     extra_save_data = {
+        'training_config': training_config,
         'episode': start_episode + episodes,
         'rewards': all_rewards,
         'losses': all_losses,
@@ -374,6 +378,8 @@ def train_agent(
 
 
 def main():
+    from src.console import configure_console
+    configure_console()
     parser = argparse.ArgumentParser(
         description="Train RL Roulette agent",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -506,6 +512,9 @@ def main():
         help="Target network update frequency"
     )
     
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
+    parser.add_argument('--unit-stake', type=float, default=1.0)
     args = parser.parse_args()
     
     print("\n" + "="*60)
@@ -517,9 +526,6 @@ def main():
     real_numbers = None
     if args.use_real_data:
         real_numbers = get_real_data(args.session_id)
-        if not real_numbers:
-            print("⚠️ No real data available, falling back to simulated data")
-            args.use_real_data = False
     
     # Train agent
     results = train_agent(
@@ -542,7 +548,8 @@ def main():
         initial_bankroll=args.initial_bankroll,
         use_flat_env=args.flat_env,
         use_fuzzy_adaptive=args.fuzzy_adaptive,
-        fuzzy_adjustment_rate=args.fuzzy_rate
+        fuzzy_adjustment_rate=args.fuzzy_rate,
+        seed=args.seed, device=args.device, unit_stake=args.unit_stake
     )
     
     # Print final summary

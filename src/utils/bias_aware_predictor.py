@@ -3,7 +3,7 @@ from typing import Dict, List
 from collections import Counter
 
 from src.utils.bias_detection import analyze_all_numbers, formal_chi_square_test
-from src.utils.predictor import FAIR_PROBABILITY
+from src.probabilities import FAIR_PROBABILITY, frequency_probabilities
 
 
 @dataclass
@@ -126,20 +126,10 @@ class BiasAwarePredictor:
             for number in range(37)
         }
 
-        if not selected_numbers:
-            return self._normalize(probs)
-
-        selected_mass = sum(probs[number] for number in selected_numbers)
-        baseline_mass = FAIR_PROBABILITY * len(selected_numbers)
-        lift = max(0.0, min(self.config.confidence_cap, selected_mass - baseline_mass))
-        non_selected = [number for number in range(37) if number not in selected_numbers]
-
-        for number in selected_numbers:
-            probs[number] += lift / len(selected_numbers)
-        for number in non_selected:
-            probs[number] = max(0.0, probs[number] - lift / len(non_selected))
-
         return self._normalize(probs)
+
+    def predict_proba(self, history):
+        return frequency_probabilities(history, self.config.smoothing_alpha)
 
     def _compute_confidence(
         self,

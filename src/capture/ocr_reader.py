@@ -1,6 +1,6 @@
 import re
 from typing import Optional, Tuple, List
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance
 import numpy as np
 
 
@@ -16,19 +16,6 @@ class RouletteOCR:
             import easyocr
             self.reader = easyocr.Reader(['en'], gpu=self.use_gpu, verbose=False)
             self._initialized = True
-    
-    def _is_green_dominant(self, image: Image.Image) -> bool:
-        img = image.convert('RGB')
-        pixels = np.array(img)
-        
-        r = pixels[:, :, 0].astype(float)
-        g = pixels[:, :, 1].astype(float)
-        b = pixels[:, :, 2].astype(float)
-        
-        green_mask = (g > r * 1.2) & (g > b * 1.2) & (g > 80)
-        green_ratio = np.sum(green_mask) / green_mask.size
-        
-        return green_ratio > 0.15
     
     def _preprocess(self, image: Image.Image) -> Image.Image:
         img = image.convert('RGB')
@@ -46,9 +33,6 @@ class RouletteOCR:
         return img
     
     def read_number(self, image: Image.Image) -> Optional[int]:
-        if self._is_green_dominant(image):
-            return 0
-        
         self._ensure_initialized()
         
         processed = self._preprocess(image)
@@ -64,9 +48,6 @@ class RouletteOCR:
         return None
     
     def read_all_numbers(self, image: Image.Image) -> List[Tuple[int, float]]:
-        if self._is_green_dominant(image):
-            return [(0, 1.0)]
-        
         self._ensure_initialized()
         
         processed = self._preprocess(image)

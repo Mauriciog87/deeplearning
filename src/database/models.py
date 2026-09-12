@@ -5,11 +5,15 @@ Stores roulette spins from real sessions for training and analysis.
 """
 
 import sqlite3
-import os
+import json
+from contextlib import contextmanager
+from uuid import uuid4
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List, Optional
 from pathlib import Path
+from src.settlement import validate_number
+from src.probabilities import validate_probabilities
 
 
 # Default database path
@@ -161,6 +165,8 @@ class Database:
         """Get a database connection with row factory."""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('PRAGMA busy_timeout = 5000')
         return conn
     
     def _init_db(self):
@@ -168,6 +174,12 @@ class Database:
         conn = self._get_connection()
         cursor = conn.cursor()
         
+        version = cursor.execute('PRAGMA user_version').fetchone()[0]
+        existing = cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone()
+        if version not in (0, 2) or (existing and version != 2):
+            conn.close()
+            raise ValueError('Database schema is obsolete; reset the database before using this version')
+
         # Sessions table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sessions (
@@ -185,8 +197,11 @@ class Database:
             CREATE TABLE IF NOT EXISTS spins (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
-                number INTEGER NOT NULL CHECK(number >= 0 AND number <= 36),
+                number INTEGER NOT NULL CHECK(typeof(number) = 'integer' AND number >= 0 AND number <= 36),
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                event_id TEXT,
+                UNIQUE(session_id, event_id),
+                UNIQUE(session_id, id),
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
             )
         ''')
@@ -218,6 +233,10 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
                 spin_id INTEGER,
+                predictor_type TEXT NOT NULL DEFAULT 'statistical',
+                context_count INTEGER NOT NULL DEFAULT 0,
+                probabilities TEXT CHECK(probabilities IS NULL OR json_valid(probabilities)),
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'settled', 'superseded')),
                 predicted_number INTEGER,
                 actual_number INTEGER,
                 predicted_color TEXT,
@@ -237,7 +256,7 @@ class Database:
                 column_correct INTEGER,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-                FOREIGN KEY (spin_id) REFERENCES spins(id) ON DELETE SET NULL
+                FOREIGN KEY (session_id, spin_id) REFERENCES spins(session_id, id) ON DELETE CASCADE
             )
         ''')
         
@@ -246,34 +265,25 @@ class Database:
             ON predictions(session_id)
         ''')
         
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS predictor_stats (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                predictor_type TEXT NOT NULL,
-                total_predictions INTEGER DEFAULT 0,
-                number_correct INTEGER DEFAULT 0,
-                color_correct INTEGER DEFAULT 0,
-                parity_correct INTEGER DEFAULT 0,
-                high_low_correct INTEGER DEFAULT 0,
-                dozen_correct INTEGER DEFAULT 0,
-                column_correct INTEGER DEFAULT 0,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-                UNIQUE(session_id, predictor_type)
+        cursor.execute("""
+            CREATE VIEW IF NOT EXISTS predictor_stats AS
+            SELECT session_id, predictor_type, COUNT(*) AS total_predictions,
+                   SUM(predicted_number = actual_number) AS number_correct,
+                   SUM(color_correct) AS color_correct, SUM(parity_correct) AS parity_correct,
+                   SUM(high_low_correct) AS high_low_correct, SUM(dozen_correct) AS dozen_correct,
+                   SUM(column_correct) AS column_correct
+            FROM predictions WHERE status = 'settled' GROUP BY session_id, predictor_type
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS capture_observations (
+                event_id TEXT PRIMARY KEY, session_id INTEGER NOT NULL, observed_at TEXT NOT NULL,
+                numbers TEXT NOT NULL CHECK(json_valid(numbers)), confidence REAL NOT NULL,
+                status TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
             )
-        ''')
-        
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_predictor_stats_session
-            ON predictor_stats(session_id)
-        ''')
-        
-        try:
-            cursor.execute('ALTER TABLE predictions ADD COLUMN predictor_type TEXT')
-        except sqlite3.OperationalError:
-            pass
-        
+        """)
+        cursor.execute('PRAGMA user_version = 2')
+
         cursor.execute('''
             CREATE VIEW IF NOT EXISTS spin_components AS
             SELECT 
@@ -364,7 +374,7 @@ class Database:
         
         # Load spins
         cursor.execute('''
-            SELECT * FROM spins WHERE session_id = ? ORDER BY timestamp
+            SELECT * FROM spins WHERE session_id = ? ORDER BY timestamp, id
         ''', (session_id,))
         
         for spin_row in cursor.fetchall():
@@ -388,7 +398,7 @@ class Database:
             FROM sessions s 
             LEFT JOIN spins sp ON s.id = sp.session_id 
             GROUP BY s.id 
-            ORDER BY s.created_at DESC
+            ORDER BY s.created_at DESC, s.id DESC
         ''')
         
         sessions = []
@@ -420,45 +430,104 @@ class Database:
     
     # ==================== Spin Operations ====================
     
-    def add_spin(self, session_id: int, number: int) -> Spin:
-        """Add a single spin to a session."""
-        if not 0 <= number <= 36:
-            raise ValueError(f"Invalid roulette number: {number}")
-        
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO spins (session_id, number)
-            VALUES (?, ?)
-        ''', (session_id, number))
-        
+    @contextmanager
+    def transaction(self):
+        connection = self._get_connection()
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _insert_spin(self, connection, session_id, number, event_id=None, timestamp=None):
+        number = validate_number(number)
+        if event_id:
+            prior = connection.execute('SELECT * FROM spins WHERE session_id=? AND event_id=?',
+                                       (session_id, event_id)).fetchone()
+            if prior:
+                if prior['number'] != number:
+                    raise ValueError('Event ID was already used for a different outcome')
+                return Spin(id=prior['id'], session_id=session_id, number=number,
+                            timestamp=datetime.fromisoformat(prior['timestamp']))
+        context = connection.execute('SELECT COUNT(*) FROM spins WHERE session_id=?', (session_id,)).fetchone()[0]
+        timestamp = timestamp or datetime.now()
+        cursor = connection.execute('INSERT INTO spins(session_id, number, timestamp, event_id) VALUES (?, ?, ?, ?)',
+                                    (session_id, number, timestamp.isoformat(), event_id))
         spin_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        
-        return Spin(id=spin_id, session_id=session_id, number=number)
-    
+        actual = Spin.get_components_from_number(number)
+        connection.execute("""
+            UPDATE predictions SET spin_id=?, actual_number=?, actual_color=?, actual_parity=?,
+                actual_high_low=?, actual_dozen=?, actual_column=?,
+                color_correct=(predicted_color=?), parity_correct=(predicted_parity=?),
+                high_low_correct=(predicted_high_low=?), dozen_correct=(predicted_dozen=?),
+                column_correct=(predicted_column=?), status='settled'
+            WHERE session_id=? AND context_count=? AND status='pending'
+        """, (spin_id, number, actual['color'], actual['parity'], actual['high_low'], actual['dozen'],
+              actual['column'], actual['color'], actual['parity'], actual['high_low'], actual['dozen'],
+              actual['column'], session_id, context))
+        return Spin(id=spin_id, session_id=session_id, number=number, timestamp=timestamp)
+
+    def add_spin(self, session_id: int, number: int, *, event_id=None, timestamp=None) -> Spin:
+        with self.transaction() as connection:
+            return self._insert_spin(connection, session_id, number, event_id, timestamp)
+
     def add_spins_bulk(self, session_id: int, numbers: List[int]) -> int:
-        """Add multiple spins to a session efficiently."""
-        for n in numbers:
-            if not 0 <= n <= 36:
-                raise ValueError(f"Invalid roulette number: {n}")
-        
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.executemany('''
-            INSERT INTO spins (session_id, number)
-            VALUES (?, ?)
-        ''', [(session_id, n) for n in numbers])
-        
-        count = cursor.rowcount
-        conn.commit()
-        conn.close()
-        
-        return count
-    
+        numbers = [validate_number(number) for number in numbers]
+        with self.transaction() as connection:
+            for number in numbers:
+                self._insert_spin(connection, session_id, number)
+        return len(numbers)
+
+    def emit_predictions(self, session_id, predictions, *, expected_count):
+        prepared = []
+        for kind, prediction in predictions.items():
+            if prediction is None:
+                continue
+            vector = validate_probabilities(prediction.number.all_probabilities)
+            prepared.append((getattr(kind, 'value', kind), prediction, json.dumps(vector.tolist(), allow_nan=False)))
+        with self.transaction() as connection:
+            count = connection.execute('SELECT COUNT(*) FROM spins WHERE session_id=?', (session_id,)).fetchone()[0]
+            if count != expected_count:
+                raise ValueError('Session history changed before the predictions were saved')
+            ids = []
+            for kind, prediction, probabilities in prepared:
+                prior = connection.execute("""
+                    SELECT id, probabilities FROM predictions WHERE session_id=? AND predictor_type=?
+                    AND context_count=? AND status='pending'
+                """, (session_id, kind, count)).fetchone()
+                if prior and prior['probabilities'] == probabilities:
+                    ids.append(prior['id'])
+                    continue
+                if prior:
+                    connection.execute("UPDATE predictions SET status='superseded' WHERE id=?", (prior['id'],))
+                cursor = connection.execute("""
+                    INSERT INTO predictions(session_id, predictor_type, context_count, probabilities,
+                        predicted_number, predicted_color, predicted_parity, predicted_high_low,
+                        predicted_dozen, predicted_column, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (session_id, kind, count, probabilities, prediction.number.value, prediction.color.value,
+                      prediction.parity.value, prediction.high_low.value, prediction.dozen.value,
+                      prediction.column.value, datetime.now().isoformat()))
+                ids.append(cursor.lastrowid)
+            return ids
+
+    def record_capture_observation(self, session_id, numbers, confidence, *, event_id=None,
+                                   observed_at=None, status='pending', reason=''):
+        event_id = event_id or str(uuid4())
+        numbers = [validate_number(number) for number in numbers]
+        with self.transaction() as connection:
+            connection.execute("""
+                INSERT INTO capture_observations(event_id, session_id, observed_at, numbers, confidence, status, reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET status=excluded.status, reason=excluded.reason
+            """, (event_id, session_id, (observed_at or datetime.now()).isoformat(),
+                  json.dumps(numbers), float(confidence), status, reason))
+        return event_id
+
     def get_spins(self, session_id: int = None, limit: int = None) -> List[Spin]:
         """
         Get spins, optionally filtered by session.
@@ -477,7 +546,7 @@ class Database:
             query += ' WHERE session_id = ?'
             params.append(session_id)
         
-        query += ' ORDER BY timestamp DESC'
+        query += ' ORDER BY timestamp DESC, id DESC'
         
         if limit:
             query += ' LIMIT ?'
@@ -506,10 +575,10 @@ class Database:
             cursor.execute('''
                 SELECT number FROM spins 
                 WHERE session_id = ? 
-                ORDER BY timestamp
+                ORDER BY timestamp, id
             ''', (session_id,))
         else:
-            cursor.execute('SELECT number FROM spins ORDER BY timestamp')
+            cursor.execute('SELECT number FROM spins ORDER BY timestamp, id')
         
         numbers = [row['number'] for row in cursor.fetchall()]
         conn.close()
@@ -574,6 +643,8 @@ class Database:
         return colors
     
     def add_prediction(self, prediction: Prediction) -> Prediction:
+        if prediction.actual_number is not None or prediction.spin_id is not None:
+            raise ValueError('Predictions must be recorded before their outcome')
         conn = self._get_connection()
         cursor = conn.cursor()
         
@@ -602,6 +673,8 @@ class Database:
         ))
         
         prediction.id = cursor.lastrowid
+        cursor.execute('UPDATE predictions SET context_count=(SELECT COUNT(*) FROM spins WHERE session_id=?) WHERE id=?',
+                       (prediction.session_id, prediction.id))
         conn.commit()
         conn.close()
         return prediction
@@ -644,45 +717,6 @@ class Database:
             "dozen": {"correct": row['dozen_correct'] or 0, "pct": (row['dozen_correct'] or 0) / total * 100},
             "column": {"correct": row['column_correct'] or 0, "pct": (row['column_correct'] or 0) / total * 100}
         }
-    
-    def upsert_predictor_stats(
-        self, 
-        session_id: int, 
-        predictor_type: str,
-        total_predictions: int,
-        number_correct: int,
-        color_correct: int,
-        parity_correct: int,
-        high_low_correct: int,
-        dozen_correct: int,
-        column_correct: int
-    ):
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO predictor_stats (
-                session_id, predictor_type, total_predictions,
-                number_correct, color_correct, parity_correct,
-                high_low_correct, dozen_correct, column_correct, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(session_id, predictor_type) DO UPDATE SET
-                total_predictions = excluded.total_predictions,
-                number_correct = excluded.number_correct,
-                color_correct = excluded.color_correct,
-                parity_correct = excluded.parity_correct,
-                high_low_correct = excluded.high_low_correct,
-                dozen_correct = excluded.dozen_correct,
-                column_correct = excluded.column_correct,
-                updated_at = CURRENT_TIMESTAMP
-        ''', (
-            session_id, predictor_type, total_predictions,
-            number_correct, color_correct, parity_correct,
-            high_low_correct, dozen_correct, column_correct
-        ))
-        
-        conn.commit()
-        conn.close()
     
     def get_predictor_stats(self, session_id: int) -> List[dict]:
         conn = self._get_connection()
@@ -754,7 +788,7 @@ class Database:
             query += ' WHERE session_id = ?'
             params.append(session_id)
         
-        query += ' ORDER BY timestamp DESC'
+        query += ' ORDER BY timestamp DESC, id DESC'
         
         if limit:
             query += ' LIMIT ?'

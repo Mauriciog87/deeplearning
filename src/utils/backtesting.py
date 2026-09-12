@@ -4,6 +4,7 @@ from enum import Enum
 import numpy as np
 from collections import Counter
 from datetime import datetime
+from ..settlement import settle_bet, validate_stake
 
 
 EUROPEAN_HOUSE_EDGE = 2.7  # 2.7% house edge
@@ -48,6 +49,8 @@ class BetResult:
     payout: float
     profit: float
     balance_after: float
+    total_stake: float = 0.0
+    balance_before: float = 0.0
 
 
 @dataclass 
@@ -249,6 +252,9 @@ def flat_bet_backtest(
     From Salirrosas (2016): Flat betting consistently outperformed
     Kelly Criterion due to lower variance.
     """
+    validate_stake(0, initial_balance)
+    if not np.isfinite(bet_amount) or bet_amount <= 0:
+        raise ValueError('Unit stake must be positive and finite')
     balance = initial_balance
     equity_curve = [balance]
     bets = []
@@ -257,18 +263,19 @@ def flat_bet_backtest(
     payout = PAYOUTS[bet_type]
     
     for i, actual in enumerate(numbers):
-        if balance < bet_amount:
+        if not bet_numbers:
+            break
+        total_stake = bet_amount * (len(bet_numbers) if bet_type == BetType.STRAIGHT_UP else bool(bet_numbers))
+        if balance < total_stake:
             break
         
         won = actual in bet_numbers
         results.append(won)
         
-        if won:
-            profit = bet_amount * payout
-        else:
-            profit = -bet_amount
-        
-        balance += profit
+        settlement = settle_bet(actual, bet_numbers, bet_amount, balance,
+                                payout=payout, separate_straights=bet_type == BetType.STRAIGHT_UP)
+        profit = settlement.net_profit
+        balance = settlement.balance_after
         equity_curve.append(balance)
         
         bets.append(BetResult(
@@ -280,7 +287,9 @@ def flat_bet_backtest(
             won=won,
             payout=payout if won else 0,
             profit=profit,
-            balance_after=balance
+            balance_after=balance,
+            total_stake=settlement.total_stake,
+            balance_before=settlement.balance_before
         ))
     
     if not bets:
@@ -361,6 +370,9 @@ def walk_forward_optimization(
     in_sample_profits = []
     out_sample_profits = []
     
+    if training_window < 1 or testing_window < 1:
+        raise ValueError('Training and testing windows must be positive')
+    test_balance = initial_balance
     start = 0
     while start + training_window + testing_window <= len(numbers):
         train_data = numbers[start:start + training_window]
@@ -374,8 +386,9 @@ def walk_forward_optimization(
             )
             
             test_backtest = flat_bet_backtest(
-                test_data, bet_numbers, bet_amount, initial_balance
+                test_data, bet_numbers, bet_amount, test_balance
             )
+            test_balance = test_backtest.final_balance
             
             period_results.append({
                 "period": len(period_results) + 1,
