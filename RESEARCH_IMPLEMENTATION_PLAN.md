@@ -58,6 +58,8 @@ Baseline: `7f6d915`. Scope: implement the recommendations from the paper audit, 
 
 ## Progress
 
+Entries below record what was complete at each commit. A statement that work remained pending belongs to that historical stage; the completion audit records the final status.
+
 - Planning: inspected the clean baseline and linked worktree. The current database is preserved. Implementation and verification are pending.
 - Stage 1a: regression tests reproduced seed-replica dependence, cancellation between different run errors, and the 40-observation bin boundary failure. Fixed per-run aggregation, bin boundaries, and run-tagged reliability data. `C:/Python312/python.exe -B -m unittest test_calibration_contract test_temporal_evaluation test_temporal_bootstrap -v`: 9 tests passed. Interval replacement and joint diagnostics remain pending.
 - Stage 1b: removed percentile intervals for adaptive ECE. Evaluation schema 3 exposes fixed-bin conditional-residual bounds, method/target metadata, a predetermined model/metric error allocation, and unavailable status for incomplete seed cohorts. Tested zero-calibration coverage, replica invariance, known large errors, invalid inputs, and 100 dependent synthetic sequences at four observation counts. `C:/Python312/python.exe -B -m unittest test_calibration_contract test_evaluation_harness test_temporal_evaluation test_temporal_bootstrap -v`: 26 tests passed. Joint calibration monitoring remains pending.
@@ -89,6 +91,16 @@ Stage 4b verification: `C:/Python312/python.exe -B -m unittest test_recalibratio
 
 - Stage 7a: implemented the research CLI and eight reproducible scenario generators. Trial output retains exact configuration, seeds, data/source hashes, raw measurements, uncertainty, method assumptions, calibration/fit partitions and optimizer reports. The benchmark compares full-information policies, forecast/calibration metrics, all detectors and optional learned/online models on shared outcomes. KT is the single Dirichlet(1/2) categorical construction in Ryu and Wornell Section 3.1, using the existing verified multinomial engine. `C:/Python312/python.exe -B -m unittest test_research_benchmark -v`: 5 tests passed. Full campaigns and completion audit remain pending.
 
+### Stage 7 campaign protocol
+
+The core import regression now blocks Torch, scikit-learn, GUI and OCR modules in a fresh subprocess and executes the default research benchmark. `C:/Python312/python.exe -B -m unittest test_core_imports -v`: 2 tests passed. The core test profile includes the newly added statistical and research modules.
+
+The following finite campaigns are fixed before inspecting their results. Each uses seed `20260912`, independent trial sequences and paired methods. Reference and calibration partitions contain 300 observations each. The core campaign uses 20 trials of 1,000 test observations in all eight scenarios. The recalibration campaign uses five trials of 300 test observations in all eight scenarios, with temperature, MCLLO, normalized isotonic and online recalibration (30 oracle iterations). The representation campaign uses five trials of 300 test observations in uniform, dependent and fixed-bias scenarios, comparing ExtraTrees and both LSTM representations on CPU with three epochs and hidden size 32. These small model campaigns assess implementation and effect direction; they do not support a definitive model ranking.
+
+No seed is dropped for producing an alarm, loss or optimizer failure. Monte Carlo intervals are reported with their finite-sample precision. The separate mathematical regression campaigns already include 100 uniform streams with 1,000 observations for multinomial monitoring and 50 null streams with 500 observations for change detectors. Those checks are not pooled with overlapping benchmark seeds as independent evidence.
+
+For uniformity monitors, the filtration contains past outcomes. In the overconfidence scenario, each current forecast contains information about a freshly drawn latent probability vector, but the next outcome remains uniform given past outcomes alone. The joint forecast diagnostic conditions on the current forecast and therefore has a different null. Reference/PIT monitors test score-distribution stability: stable miscalibration is a null case, while calibration improvement can be an alternative.
+
 ## Calibration-bound derivation
 
 
@@ -119,3 +131,21 @@ For a feasible numerical solution `z`, convexity gives `F(z)-F* <= grad(F(z)) do
 The experimental payoff is `(phi(p) outer (one_hot(y)-p), Brier(p,y)/2-Brier(base,y)/2)`, with nonnegative normalized RBF features `phi`. The target is zero calibration residual and nonpositive regret. Projecting the cumulative payoff onto this cone leaves its full calibration component and the positive part of its regret component. The oracle minimizes the maximum inner product with that residual over all 37 possible outcomes, using normalized past sums.
 
 Each payoff has squared norm at most 3. If the achieved pre-outcome halfspace upper bound on round `t` is `u_t`, the distance of the average payoff from the cone is at most `sqrt(3/n + 2*sum_t((t-1)*max(u_t,0))/n^2)`. The implementation reports this bound and the actual distance. This deterministic accounting remains valid when the optimizer fails to make a step nonpositive; it does not imply convergence if positive residuals persist. It controls the stated finite feature basis, not all measurable calibration conditions. [Marx et al.](https://arxiv.org/abs/2409.19157) supplies the approachability and approximate-oracle framework; the categorical basis and solver here are explicit adaptations.
+
+## Completion audit
+
+| Recommendation | Implementation and verification evidence |
+|---|---|
+| Correct ECE aggregation, ties and dependence between seed replicas | `temporal_statistics.py`, `evaluation_harness.py`; regressions in `test_calibration_contract.py` and `test_temporal_bootstrap.py` reproduce cancellation, bin-boundary and replica failures. |
+| Replace invalid calibration intervals and distinguish joint calibration | `calibration.py` states the alternative conditional-residual target and family budget; `joint_calibration.py` separates a vector-cell diagnostic from its stronger sequential null. Tests cover calibrated/dependent streams, the joint counterexample and unavailable cohorts. |
+| Add durable sequential evidence and simultaneous probability bounds | `sequential_inference.py`, analyzer, `monitor` CLI and HH checkpoints; closed-form likelihood/projection tests, null simulations, replay/deduplication, restart spending and changed-history rejection. The CPU HH training/resume smoke retained all 180 observations. |
+| Evaluate all actions and correct profitability/OU claims | `expected_value.py`, shared settlement and harness; tests cover all 47 actions, uniform expectations, PASS, bankroll, the `1/36` threshold and the analytical IID rolling-window overlap null. |
+| Compare categorical and ordinal LSTM inputs | `lstm_predictor.py`, engine and CLI; both representations preserve train/save/resume behavior and explicit CPU selection. Old scalar checkpoints remain ordinal. The representation campaign measures held-out results. |
+| Add chronological recalibrators | `recalibration.py` and harness partitions; temperature, regularized MCLLO and fixed-block normalized isotonic expose fitted states and solver diagnostics. Tests independently verify gradients, the normalized objective, the convex gap bound, unseen classes and exclusion of test labels. |
+| Compare optional change detectors with correct guarantees | `change_detection.py` and research CLI; e-SR/e-CUSUM ARL differs from the CTM/PIT probability-of-alarm contracts. Tests cover atoms, full start-time mixture, replay, shifts and null simulations. The benchmark retains violated-assumption cases and censored delays. |
+| Evaluate bounded-score online recalibration | `online_recalibration.py`, harness and CLI; a finite RBF basis and all-outcome oracle residual accounting replace any unconditional full-calibration claim. Tests verify gradients, adversarial outcomes, chronology and state. |
+| Make comparisons reproducible and keep optional dependencies optional | `research_benchmark.py`, research CLI and tests retain seeds, hashes, partitions, raw measurements, paired metrics and uncertainty. The core profile includes the new statistical modules; an isolated subprocess blocks optional ML/GUI/OCR imports while actually running the default benchmark. |
+| Reassess prior RL and OPE choices | Double DQN action selection/evaluation, masks, termination and continuation match their tested contracts. Passive full-information replay needs no propensity weighting under its stated action-independence assumptions. |
+| Reconcile source attributions and exclusions | README and `arxiv_paper_memory.md` distinguish exact formulas from adaptations. Physical prediction, unsupported TSFM additions and unnecessary IPS/DR remain excluded for the reasons in the original audit. No experiment is automatically promoted. |
+
+The final measured campaign results and full-suite outcome are recorded below when execution finishes. Real-data validation cannot establish superiority at this point: a read-only audit found zero sessions, spins and predictions. Capture configuration SHA-256 was `8292b5b495d2dd5b89557ec7586c75065c11f589bc29b32cdafd6e79041a0c72`; none of the research changes modifies that configuration or the user database.

@@ -15,7 +15,9 @@ def main():
     if args.profile == 'core':
         tests = ['test_core_imports', 'test_cli_integrity', 'test_database_integrity', 'test_evaluation_harness',
                  'test_randomness', 'test_multiple_testing', 'test_heatmaps',
-                 'test_statistical_inference', 'test_settlement_environment']
+                 'test_statistical_inference', 'test_settlement_environment', 'test_calibration_contract',
+                 'test_joint_calibration', 'test_sequential_inference', 'test_sequential_analyzer',
+                 'test_expected_value', 'test_change_detection', 'test_online_recalibration', 'test_research_benchmark']
     return subprocess.run([sys.executable, '-m', 'unittest', *tests], cwd=root, env=env).returncode
 
 

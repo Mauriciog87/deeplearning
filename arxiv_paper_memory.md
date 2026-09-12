@@ -2,7 +2,7 @@
 
 Fecha de lectura: 2026-06-16
 
-Revision de implementacion: 2026-09-12. Las decisiones de lectura distinguen inspiracion de reproduccion del metodo. El harness actual usa ECE descriptivo por ejecucion y cotas separadas para residuos condicionales en bins fijos; no implementa los intervalos poblacionales l2 de Sun et al. El contrato y los avances estan en `RESEARCH_IMPLEMENTATION_PLAN.md`.
+Revisión de implementación: 2026-09-12. Las decisiones siguientes distinguen inspiración, reproducción de fórmulas y adaptaciones. El harness usa ECE descriptivo por ejecución y cotas separadas para residuos condicionales en bins fijos; no implementa los intervalos poblacionales l2 de Sun et al. Los contratos, las verificaciones y los resultados están en [el plan de implementación](RESEARCH_IMPLEMENTATION_PLAN.md).
 
 Objetivo: usar papers como memoria tecnica para mejorar el motor de ruleta sin vender prediccion magica. La prioridad actual es diagnostico estadistico, deteccion de drift, calibracion y evaluacion robusta. Los modelos pesados quedan fuera hasta que exista volumen de datos y un baseline clasico fuerte.
 
@@ -10,22 +10,22 @@ Fuentes usadas: PDFs de `https://arxiv.org/pdf/{id}`, metadata de arXiv API, y b
 
 ## Decision Summary
 
-implement_now:
-- `1609.09601`: walk-forward, backtesting y sesgo como trading cuantitativo.
-- `2108.13264`: bootstrap temporal adaptado y comparaciones pareadas. La fraccion de remuestreos positivos no es la metrica de probabilidad de mejora del paper.
-- `2109.03480`: ECE con bins/reliability y cuidado con estimadores.
-- `2408.08998`: referencia sobre sesgo y limites de la inferencia de calibracion; sus intervalos l2 no estan reproducidos.
-- `1706.03415`, `2602.13848`, `2407.07290`: usar inspiracion de cambio de distribucion, pero con ventanas y tests simples.
-- `2212.00173`: usar idea de robustez ante mismatch, no SPADE completo.
-- `2403.18716`, `2001.11838`: suite de tests de aleatoriedad reproducible.
+Implementado:
+- Walk-forward por sesión, liquidación de las 47 acciones, PASS, probabilidades simultáneas y separación entre sesgo y rentabilidad.
+- ECE por ejecución, bootstrap temporal pareado, cotas de residuos condicionales y diagnóstico conjunto. No se reproducen el KDE de Posocco ni los intervalos l2 de Sun; `positive_bootstrap_fraction` tampoco es la probabilidad de mejora de Agarwal.
+- Evidencia multinomial persistente y comparación KT categórica. Las alertas batch usan BY por defecto; no son un monitor secuencial ni una implementación de e-GAI.
+- LSTM categórico por defecto y representación ordinal como ablación explícita.
 
-future_experiment:
-- `2011.04102`, `2212.06355`, `2011.14359`: OPE formal si el motor empieza a comparar politicas de apuesta offline.
-- `2310.10688`, `2403.07815`, `2402.03885`, `2412.19286`: TSFM solo sobre features agregadas y con mucha mas data.
+Experimentos implementados, sin promoción automática:
+- E-SR/e-CUSUM, CTM con apuestas lineales corregidas y PITMonitor.
+- Temperature scaling, MCLLO regularizado e isotonic normalizado con particiones cronológicas.
+- Recalibración online con base finita, comparación Brier/2 y residuos medidos del optimizador.
+- Benchmark sintético reproducible con incertidumbre y resultados desfavorables conservados.
 
-reference_only:
-- `1204.6412`: ruleta fisica predictiva requiere sensores/velocidad/posicion, no aplica al dataset de numeros crudos.
-- `2603.14092`: SMECE es util conceptualmente para labels probabilisticos, pero aqui los outcomes son etiquetas duras 0-36.
+Exclusiones vigentes:
+- IPS/DR no hacen falta para replay pasivo con todos los resultados observados y liquidación conocida. Se reconsideran si las acciones afectan los resultados o su observación.
+- TimesFM, Chronos y MOMENT requieren evidencia de señal útil y una comparación que justifique su costo; no se incorporan por ahora.
+- La predicción física requiere medidas de la rueda y la bola que este dataset no contiene. SMECE requiere etiquetas probabilísticas; aquí se observan números 0–36.
 
 ## `1609.09601` - Biased Roulette Wheel: A Quantitative Trading Strategy Approach
 
@@ -59,7 +59,7 @@ Lectura tecnica: el paper muestra que comparar medias puntuales en RL con pocas 
 
 Supuestos: resultados ruidosos, muestra finita y muchos metodos comparados. En ruleta esto es mas severo porque la ventaja esperada justa es negativa y los eventos raros dominan el ROI.
 
-Aplicacion ahora: bootstrap por filas/folds, baseline fair, comparacion pareada por indice, P(mejora), drawdown y reglas anti-leakage en walk-forward.
+Aplicación actual: bootstrap de bloques temporales dentro de cada sesión y remuestreo de ejecuciones, con los mismos índices para todos los métodos y semillas. Se comparan diferencias pareadas, drawdown y exposición. Los intervalos dependen de la estabilidad temporal requerida por ese remuestreo; no son una garantía universal del paper. `positive_bootstrap_fraction` es la fracción de diferencias bootstrap positivas, no una probabilidad posterior ni la métrica de probabilidad de mejora de Agarwal.
 
 ## `2011.04102` - Reliable Off-policy Evaluation for Reinforcement Learning
 
@@ -67,19 +67,17 @@ Decision: future_experiment.
 
 Lectura tecnica: propone estimaciones robustas/optimistas de recompensa para OPE con incertidumbre distribucional. Es relevante cuando una politica objetivo se evalua con datos generados por otra politica, sin desplegarla.
 
-Supuestos: hay trayectorias, politicas de comportamiento, recompensas y estructura secuencial. El motor actual puede simular apuestas sobre historial, pero no tiene logs ricos de politica de comportamiento ni propensities.
+Supuestos: el problema general tiene recompensas parcialmente observadas y políticas de comportamiento. En el replay pasivo de este repo se observa el resultado y se conoce la liquidación de cualquier acción; se puede calcular cada recompensa contrafactual sin propensiones, mientras apostar no altere el proceso ni la observación.
 
-Aplicacion ahora: no implementar OPE formal. La accion practica es dejar el evaluate walk-forward como metodo principal y no aceptar modelos si no superan baselines en datos retenidos.
+Aplicación actual: evaluación cronológica de información completa, con bankroll y PASS. No implementar IPS/DR para este caso. Una aplicación donde las acciones afecten lo observado necesitaría otro contrato de identificación y logging.
 
 ## `2212.06355` - A Review of Off-Policy Evaluation in Reinforcement Learning
 
 Decision: future_experiment.
 
-Lectura tecnica: revisa OPE, direct method, importance sampling, doubly robust, eficiencia y propiedades estadisticas. Sirve como mapa para no inventar evaluacion offline sin propensities.
+Lectura técnica: revisa direct method, importance sampling, doubly robust, eficiencia y propiedades estadísticas. Las necesidades de logging dependen de qué recompensas son observables y de cómo las acciones afectan el proceso.
 
-Supuestos: MDP/contextual bandit con politicas observables. En ruleta, las acciones de apuesta del usuario y la politica que genero los datos no estan suficientemente registradas.
-
-Aplicacion ahora: reporte de evaluacion debe ser explicito: esto es backtest walk-forward, no prueba causal de una politica desplegada. Futuro: guardar accion, stake, odds, bankroll y propensities si se quiere OPE real.
+Aplicación actual: el reporte separa replay pasivo de información completa y aplicaciones con observación dependiente de la acción. La ausencia de propensiones no impide el primero. Ningún backtest establece que una ventaja histórica persista al desplegar la política.
 
 ## `2011.14359` - Optimal Mixture Weights for Off-Policy Evaluation with Multiple Behavior Policies
 
@@ -129,7 +127,7 @@ Lectura tecnica: detecta cambios en streams sin conocer el modelo de cambio, asu
 
 Supuestos: stream y referencia de intercambioabilidad. En ruleta, la hipotesis nula natural es frecuencia justa e independencia; cambios de rueda/sesion rompen esto.
 
-Aplicacion ahora: implementar ventanas rolling, z-scores, p-values y drift entre sesiones. Futuro: martingales conformales si hay suficientes spins por mesa.
+Aplicación actual: conservar las ventanas como diagnóstico descriptivo y usar contratos separados para los monitores secuenciales. `ReferenceConditionalMonitor` y `PITMonitor` son experimentos opcionales basados en las referencias posteriores descritas abajo; no se atribuye su implementación exacta a este paper.
 
 ## `2602.13848` - Testing For Distribution Shifts with Conditional Conformal Test Martingales
 
@@ -139,7 +137,7 @@ Lectura tecnica: propone tests secuenciales de shift contra una referencia fija 
 
 Supuestos: referencia fija y muestra entrante secuencial. En el repo, la referencia fair 1/37 es conocida, pero las sesiones reales pueden ser referencia empirica.
 
-Aplicacion ahora: reportar p-values por ventanas y no tratar la referencia empirica como perfecta. Futuro: CTM si el sistema opera online con alertas continuas.
+Aplicación actual: `ReferenceConditionalMonitor` usa una referencia congelada, una banda DKW y la apuesta lineal corregida de la ecuación 7. Mezcla siete apuestas fijas; no reproduce la actualización smoothed ONS del paper. El presupuesto total incluye el fallo de la banda de referencia. Requiere referencia y observaciones IID de la misma distribución bajo el nulo, y tiene potencia limitada frente a cambios que no desplazan suficientemente la media del PIT empírico. Las pruebas verifican fórmula, átomos, replay y falsas alarmas.
 
 ## `2407.07290` - Causal Discovery-Driven Change Point Detection in Time Series
 
@@ -223,21 +221,9 @@ Aplicacion ahora: descartar TSFM en el camino critico. Reabrir solo con un proto
 
 ## Implementation Decisions From Reading
 
-Ahora:
-- Agregar suite `randomness` con uniformidad, runs, autocorrelacion serial, transiciones y drift de entropia.
-- Calibracion: ECE por ejecucion para confianza, clases y conjuntos top-k; cotas separadas para residuos condicionales en bins fijos. La calibracion conjunta requiere otro diagnostico.
-- Agregar p-values a alertas de heatmap.
-- Mantener evaluacion walk-forward, comparaciones pareadas y bootstrap.
+Implementado: diagnósticos batch de aleatoriedad y heatmaps con supuestos explícitos; inferencia secuencial separada; evaluación temporal pareada; calibración marginal y diagnóstico conjunto; políticas de información completa; comparadores de recalibración y cambio opcionales. Las secciones siguientes y el plan identifican las adaptaciones y sus pruebas.
 
-Futuro:
-- OPE con propensities si se registran politicas de apuesta.
-- Martingales conformales si hay monitoreo online largo por mesa.
-- TSFM solo sobre features derivadas por ventana.
-
-Descartado:
-- Prediccion fisica sin sensores.
-- Modelos foundation sobre numeros crudos.
-- Staking agresivo sin intervalos y drawdown.
+Se mantienen las exclusiones del resumen: predicción física sin medidas, TSFM sin señal demostrada y métodos IPS/DR innecesarios para el contrato pasivo actual. Ningún detector activa por sí solo una estrategia agresiva.
 
 ## Second-Wave arXiv Search - 2026-06-16
 
@@ -247,9 +233,9 @@ Objetivo: cubrir huecos que quedaron fuera pero son importantes para el proyecto
 
 Decision: read_next.
 
-Lectura: DataCOPE pregunta si un dataset offline permite evaluar una politica objetivo antes de desplegarla. Esto es directamente relevante porque el repo hoy puede hacer walk-forward, pero no puede afirmar OPE causal sin logs de accion y propensiones.
+Lectura: DataCOPE estudia si un dataset de bandits permite evaluar una política. El problema de recompensas parcialmente observadas no coincide con la liquidación pasiva de ruleta.
 
-Implementacion ahora: agregar un diagnostico de OPE readiness al reporte de evaluacion. Debe marcar que el nivel actual soportado es backtest walk-forward pareado y listar campos faltantes para IPS/DR/SWITCH.
+Aplicación actual: el reporte OPE readiness conserva los requisitos de IPS/DR/SWITCH para aplicaciones dependientes de la acción y aclara por qué no son necesarios para el replay de información completa actual. No se implementa DataCOPE.
 
 ### `1612.01205` - Optimal and Adaptive Off-policy Evaluation in Contextual Bandits
 
@@ -265,7 +251,7 @@ Decision: read_next.
 
 Lectura: extiende DR a decision secuencial y lo ubica como pieza de safe policy improvement. El valor para el proyecto es metodologico: no evaluar politicas de apuesta nuevas solo con datos generados por otra politica sin modelar esa diferencia.
 
-Implementacion ahora: reporte OPE readiness y separacion explicita entre walk-forward backtest y OPE formal.
+Aplicación actual: separar replay pasivo y evaluación de trayectorias afectadas por acciones. No se implementa el estimador DR secuencial; no aporta identificación adicional cuando se conocen todas las recompensas contrafactuales.
 
 ### `1801.04756` - A Binning Approach to Quickest Change Detection with Unknown Post-Change Distribution
 
@@ -279,9 +265,9 @@ Implementacion ahora: agregar test de cambio categorial por ventanas izquierda/d
 
 Decision: implement_now.
 
-Lectura: el problema es controlar falsos descubrimientos en una secuencia de tests online. El repo ahora genera muchos p-values, por lo que necesita q-values/FDR aunque no implemente e-GAI completo.
+Lectura: e-GAI controla FDR online bajo los requisitos de validez condicional de sus e-values. Un ajuste batch de p-values no reproduce ese algoritmo ni permite mirar repetidamente sin costo.
 
-Implementacion ahora: Benjamini-Hochberg para reportes batch de randomness y heatmap anomalies. Futuro: alpha-investing/e-values si hay alertas live continuas.
+Aplicación actual: BY por defecto para familias batch dependientes; BH queda como opción con sus supuestos. Para seguimiento persistente se usa evidencia multinomial y un presupuesto explícito por stream/reinicio. Es control de probabilidad de falsas alarmas para esa familia, no una implementación de e-GAI ni una promesa de FDR online adaptativo.
 
 ### `1706.05378` - Multi-A/B Testing with Online FDR Control
 
@@ -293,19 +279,19 @@ Implementacion ahora: no. Requiere eventos online y definicion clara de hipotesi
 
 ### `2602.18573` - Multiclass Calibration Assessment and Recalibration via Linear Log Odds
 
-Decision: future_experiment.
+Decision: implemented_experiment.
 
 Lectura: propone evaluar y recalibrar modelos multiclase sin acceso interno. Encaja con predictores black-box 0-36.
 
-Implementacion ahora: ya hay full ECE y top-k ECE. No recalibrar aun sin validation set estable.
+Aplicación actual: `ProbabilityCalibrator('mcllo')` ajusta pendientes e interceptos de log odds respecto de una clase de referencia, con parámetros acotados y regularización hacia identidad. Es una adaptación de la parametrización del paper. El harness reserva una partición cronológica de calibración y exporta estados y resultados del optimizador. ECE por clase y masa top-k no se presentan como full calibration.
 
 ### `2512.09054` - Normalization-Aware Isotonic Multiclass Calibration
 
-Decision: future_experiment.
+Decision: implemented_experiment.
 
 Lectura: corrige problemas de isotonic one-vs-rest al respetar normalizacion multiclase. Es prometedor para recalibracion de distribuciones 0-36.
 
-Implementacion ahora: no. Primero medir calibracion y guardar splits.
+Aplicación actual: `ProbabilityCalibrator('normalized_isotonic')` usa la pérdida multiclase normalizada de la ecuación 4, con bloques PAVA fijos y valores positivos. En coordenadas logarítmicas es un problema convexo con restricciones lineales. Se fija una escala y un dominio finito, y se reporta una cota de suboptimalidad numérica contrastada con un programa lineal independiente. No se reproduce el algoritmo MCMC ni se certifica el óptimo sobre todas las funciones isotónicas. La derivación está en el plan; la búsqueda no estableció que sea un resultado nuevo.
 
 ### `1511.02339` - Markov Chain Order Estimation with Conditional Mutual Information
 
@@ -322,3 +308,45 @@ Decision: reference_only.
 Lectura: muestra limitaciones del criterio Kelly cuando importan aproximaciones y drawdown. Relevante para comunicar riesgo, no para predecir numeros.
 
 Implementacion ahora: mantener Kelly como calculadora y no como estrategia default automatica.
+
+## Investigación y auditoría adicional - 2026-09-12
+
+### Evidencia multinomial y secuencias de confianza
+
+Fuentes: [Lindon y Malek, `2011.03567`](https://arxiv.org/abs/2011.03567), [Ryu y Wornell, `2402.03683`](https://arxiv.org/abs/2402.03683).
+
+`MultinomialMonitor` mezcla tres marginales Dirichlet contra un nulo categórico declarado. Las actualizaciones coinciden con la razón de verosimilitudes expresada mediante funciones gamma. Se invierte la región conjunta para proyectar probabilidades de números y subconjuntos; su cobertura requiere un vector de probabilidades condicionales constante. El comparador KT usa solamente Dirichlet(1/2), el caso categórico de la sección 3.1 de Ryu y Wornell. No reproduce su construcción general para vectores acotados.
+
+El monitor conserva IDs de eventos, valida el replay y distribuye el presupuesto entre streams y reinicios. Se integra con el analyzer, el CLI `monitor`, la política de valor esperado conservador y los checkpoints HH. `test_sequential_inference.py` y `test_sequential_analyzer.py` verifican fórmulas, proyecciones, cobertura bajo el nulo, persistencia y rechazo de historia alterada. La ausencia de alarma no certifica una rueda justa.
+
+### Calibración conjunta y cotas secuenciales
+
+Fuentes: [Vaicenavicius et al.](https://proceedings.mlr.press/v89/vaicenavicius19a.html), [Pinelis, teorema 3.5](https://arxiv.org/abs/1208.2200v2).
+
+El contraejemplo conjunto usa seis permutaciones de un vector con tres clases activas: los errores de confianza y por clase pueden ser cero aunque la distribución condicional del vector sea incorrecta. `JointCalibrationMonitor` agrega un diagnóstico de variación total por celdas del vector completo y una razón de verosimilitudes con alternativa predecible. Promedia procesos entre ejecuciones, sin multiplicar evidencia por semillas que comparten resultados. Su nulo es corrección predictiva condicional dado el pasado y el pronóstico, más fuerte que calibración condicionada solo al pronóstico. Es una alternativa explícita, no una reproducción del test omnibus de Vaicenavicius.
+
+Las cotas de `calibration.py` usan la desigualdad maximal para martingalas en espacio de Hilbert de Pinelis y un presupuesto sumable sobre horizontes diádicos. Cubren residuos condicionales acumulados en bins fijos, no ECE poblacional. `test_joint_calibration.py` y `test_calibration_contract.py` cubren el contraejemplo, réplicas de semillas, fórmulas, dependencia y vectores perfectamente calibrados.
+
+### Detectores de cambio opcionales
+
+Fuentes: [Shin, Ramdas y Rinaldo, `2203.03532`](https://arxiv.org/abs/2203.03532), [CTM, `2602.13848`](https://arxiv.org/abs/2602.13848), [PITMonitor, `2603.13156`](https://arxiv.org/abs/2603.13156).
+
+`CategoricalEDetector` implementa e-SR y e-CUSUM con alternativas que aumentan la probabilidad de un número. El umbral A controla longitud media hasta una falsa alarma; no controla la probabilidad de alarmar alguna vez. El benchmark fija A=H/alpha para usar la consecuencia finita P(T≤H)≤alpha.
+
+El CTM usa la adaptación con referencia finita descrita arriba. PITMonitor usa rangos secuenciales aleatorizados, apuestas de histograma y una mezcla sobre tiempos de inicio que conserva la masa aún no iniciada. Requiere PITs IID bajo el nulo; marginales estacionarias con dependencia no bastan. La localización posterior a la alarma usa el comparador Dirichlet(1/2) del paper y no es un intervalo de confianza. Un cambio hacia mejor calibración también puede disparar el monitor. `test_change_detection.py` verifica fórmulas, ties, persistencia, desplazamientos y simulaciones nulas.
+
+### Recalibración online
+
+Fuente: [Marx, Kuleshov y Ermon, `2409.19157`](https://arxiv.org/abs/2409.19157).
+
+`OnlineRecalibrator` adapta el enfoque Blackwell/ORCA a una base RBF finita y a regret de Brier/2 contra un pronóstico base. El optimizador evalúa el peor payoff de los 37 resultados antes de observar la etiqueta. Las violaciones positivas de la condición de semiespacio se conservan y entran en la cota residual; una respuesta del solver no se interpreta como certificado por sí sola. La cota controla la base elegida y no implica calibración completa o ausencia de regret si persisten errores del oráculo.
+
+El estado se mantiene entre folds y se separa por sesión y ejecución. `test_online_recalibration.py` verifica gradientes, secuencia forecast/update, cotas con optimización deliberadamente limitada y replay. El método se habilita explícitamente en `evaluate` o `research`.
+
+### Decisiones de representación y validación
+
+La revisión de [Double DQN, `1509.06461`](https://arxiv.org/abs/1509.06461) confirma que `DQNAgent.train` selecciona la siguiente acción con la red online y la evalúa con la red target. Aplica la máscara de acciones, suprime el bootstrap al terminar el episodio y lo conserva al truncar. `test_agent_state.py` verifica estos contratos y la continuación tras guardar/cargar. Esa corrección del algoritmo no implica que haya señal aprendible en una rueda justa.
+
+Los números de bolsillo son categorías, por lo que el LSTM usa one-hot como representación predeterminada. La codificación ordinal previa permanece disponible como ablación y en sus checkpoints antiguos. `test_lstm_representation.py` comprueba entrenamiento y continuación exacta de ambas; la elección de representación no demuestra una mejora de predicción.
+
+El benchmark registra configuración, semillas, hashes de datos/código y mediciones por ensayo para ocho escenarios. Las diferencias entre métodos son pareadas sobre los mismos resultados. Los intervalos Monte Carlo binomiales son exactos; los de medias entre ensayos usan una aproximación Student-t y no son simultáneos entre todas las comparaciones. Las campañas y sus limitaciones se registran en el plan. Los datos sintéticos y las políticas oráculo no establecen una ventaja sobre ruedas reales.
