@@ -1,4 +1,5 @@
 from contextlib import redirect_stdout
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -55,6 +56,61 @@ class CliIntegrityTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('Sesion 1: 50', output)
         self.assertIn('Sesion 2: 50', output)
+
+    def test_monitor_preserves_family_state_and_only_counts_new_spins(self):
+        state_path = Path(self.folder.name) / 'monitor.json'
+        output_path = Path(self.folder.name) / 'monitor-report.json'
+        args = ('monitor', '--sessions', '1', '2', '--state', str(state_path), '--output', str(output_path))
+        self.assertEqual(self.run_command(*args)[0], 0)
+        first_state = state_path.read_bytes()
+        self.assertEqual(self.run_command(*args)[0], 0)
+        self.assertEqual(state_path.read_bytes(), first_state)
+        self.repo.add_number_to_session(1, 7)
+        self.assertEqual(self.run_command(*args)[0], 0)
+        result = json.loads(output_path.read_text(encoding='utf-8'))
+        self.assertEqual(result['sessions']['1']['observations'], 51)
+        self.assertEqual(result['sessions']['2']['observations'], 50)
+        self.assertEqual(result['sessions']['1']['allocated_alpha'], .0125)
+        self.assertEqual(self.run_command(*args, '--reset')[0], 0)
+        result = json.loads(output_path.read_text(encoding='utf-8'))
+        self.assertEqual(result['sessions']['1']['observations'], 0)
+        self.assertLess(result['sessions']['1']['allocated_alpha'], .0125)
+
+    def test_monitor_rejects_changed_configuration_without_overwriting_state(self):
+        state_path = Path(self.folder.name) / 'monitor.json'
+        args = ('monitor', '--sessions', '1', '2', '--state', str(state_path))
+        self.assertEqual(self.run_command(*args)[0], 0)
+        before = state_path.read_bytes()
+        code, message = self.run_command(*args, '--alpha', '.1')
+        self.assertEqual(code, 1)
+        self.assertIn('presupuesto', message)
+        self.assertEqual(state_path.read_bytes(), before)
+
+    def test_monitor_report_cannot_overwrite_its_state_or_database(self):
+        state_path = Path(self.folder.name) / 'monitor.json'
+        args = ('monitor', '--sessions', '1', '--state', str(state_path))
+        for output_path in (state_path, Path(self.repo.db.db_path)):
+            with self.subTest(path=output_path):
+                code, message = self.run_command(*args, '--output', str(output_path))
+                self.assertEqual(code, 1)
+                self.assertIn('archivo distinto', message)
+                self.assertFalse(state_path.exists())
+                self.assertEqual(len(self.repo.get_numbers_by_session(1)), 50)
+
+    def test_monitor_rejects_edited_or_deleted_history_without_changing_state(self):
+        state_path = Path(self.folder.name) / 'monitor.json'
+        args = ('monitor', '--sessions', '1', '--state', str(state_path))
+        self.assertEqual(self.run_command(*args)[0], 0)
+        before = state_path.read_bytes()
+        original = self.repo.get_evaluation_sessions()[0]
+        variants = [replace(original, numbers=(7,) + original.numbers[1:]),
+                    replace(original, numbers=original.numbers[:-1], spin_ids=original.spin_ids[:-1])]
+        for session in variants:
+            with self.subTest(length=len(session.numbers)), patch.object(self.repo, 'get_evaluation_sessions', return_value=[session]):
+                code, message = self.run_command(*args)
+                self.assertEqual(code, 1)
+                self.assertIn('historial que solo crezca', message)
+                self.assertEqual(state_path.read_bytes(), before)
 
 
 if __name__ == '__main__':

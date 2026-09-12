@@ -939,6 +939,84 @@ def randomness_cmd(args):
     return 0 if evaluated else 1
 
 
+def monitor_cmd(args):
+    import json
+    from pathlib import Path
+    from src.checkpoints import atomic_save
+    from src.database import RouletteRepository
+    from src.datasets import dataset_manifest
+    from src.utils.bias_detection import WheelBiasAnalyzer
+
+    try:
+        family = tuple(str(value) for value in sorted(args.sessions))
+        if len(set(family)) != len(family):
+            raise ValueError('Las sesiones de la familia no pueden repetirse')
+        repo = RouletteRepository()
+        available = {session.session_id: session for session in repo.get_evaluation_sessions()}
+        if any(session_id not in available for session_id in family):
+            raise ValueError('Alguna sesion solicitada no existe')
+        sessions = [available[session_id] for session_id in family]
+        database_path = str(Path(repo.db.db_path).resolve())
+        state_path = Path(args.state)
+        if state_path.resolve() == Path(database_path):
+            raise ValueError('El estado debe usar un archivo distinto de la base de datos')
+        if args.output and Path(args.output).resolve() in (state_path.resolve(), Path(database_path)):
+            raise ValueError('El informe debe usar un archivo distinto del estado y de la base de datos')
+        saved = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else None
+        if saved is not None and (saved.get('schema_version') != 1 or saved.get('method') != 'roulette_monitor_family_v1'
+                                  or saved.get('database_path') != database_path or saved.get('sessions') != list(family)
+                                  or saved.get('alpha') != args.alpha):
+            raise ValueError('El estado no coincide con la base, la familia o el presupuesto de error solicitado')
+        analyzers = {}
+        for session in sessions:
+            if saved is None:
+                analyzer = WheelBiasAnalyzer(stream_id=session.session_id, alpha=args.alpha,
+                                             streams=family, descriptive_reports=False)
+            else:
+                record = saved['analyzers'][session.session_id]
+                if record['source'] != session.source:
+                    raise ValueError('Cambio el origen de una sesion monitoreada')
+                analyzer = WheelBiasAnalyzer.from_state(record['state'])
+                if (analyzer.stream_id != session.session_id or analyzer.budget.streams != family
+                        or analyzer.budget.alpha != args.alpha or analyzer.descriptive_reports):
+                    raise ValueError('El monitor no coincide con su familia de inferencia')
+                previous = [tuple(item) for item in record['state']['seen_events']]
+                prefix = list(zip(session.spin_ids, session.numbers))[:len(previous)]
+                if previous != prefix:
+                    raise ValueError('Los resultados previos cambiaron, se eliminaron o se reordenaron; el monitor requiere un historial que solo crezca')
+            analyzers[session.session_id] = analyzer
+        for session in sessions:
+            analyzer = analyzers[session.session_id]
+            if args.reset:
+                analyzer.reset()
+            for event_id, number in zip(session.spin_ids, session.numbers):
+                analyzer.add_spin(number, event_id=event_id)
+        state = {'schema_version': 1, 'method': 'roulette_monitor_family_v1', 'database_path': database_path,
+                 'sessions': list(family), 'alpha': args.alpha,
+                 'analyzers': {session.session_id: {'source': session.source, 'state': analyzers[session.session_id].to_state()}
+                               for session in sessions}}
+        report = {'schema_version': 1, 'dataset': dataset_manifest(sessions), 'alpha': args.alpha, 'sessions': {}}
+        for session in sessions:
+            analyzer = analyzers[session.session_id]
+            report['sessions'][session.session_id] = dict(
+                analyzer.sequential_evidence(),
+                probability_bounds={str(number): analyzer.monitor.probability_bounds([number]) for number in range(37)},
+                candidates_under_fixed_probability_model=analyzer.get_recommended_bets(),
+            )
+        atomic_save(state_path, state, neural=False)
+        if args.output:
+            atomic_save(args.output, report, neural=False)
+        for session_id, result in report['sessions'].items():
+            print(f"Sesion {session_id}: observaciones={result['observations']}; p secuencial={result['anytime_p_value']:.6g}; alpha asignado={result['allocated_alpha']:.6g}; rechazo={result['rejected']}")
+        print('Las cotas requieren probabilidades condicionales constantes. Rechazar uniformidad no demuestra una ventaja rentable ni persistente.')
+        print('El presupuesto cubre esta familia y sus reinicios. La configuracion y la seleccion de datos deben fijarse antes de observar los resultados.')
+        print(f'Estado del monitor: {state_path}')
+        return 0
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        print(f'No se pudo actualizar el monitor: {error}')
+        return 1
+
+
 def evaluate_cmd(args):
     from dataclasses import asdict
     import json
@@ -1186,6 +1264,13 @@ Ejemplos:
     randomness_parser.add_argument('--fdr-method', choices=['by', 'bh'], default='by')
     randomness_parser.add_argument('--markov-max-lag', type=int, default=3, help='Lag maximo para scan Markov')
 
+    monitor_parser = subparsers.add_parser('monitor', help='Monitoreo secuencial con estado persistente y presupuesto de error')
+    monitor_parser.add_argument('--sessions', nargs='+', type=int, required=True, help='Familia de sesiones fijada antes del monitoreo')
+    monitor_parser.add_argument('--state', required=True, help='Archivo JSON de estado; se reutiliza al continuar')
+    monitor_parser.add_argument('--alpha', type=float, default=.05, help='Presupuesto total de error para la familia y sus reinicios')
+    monitor_parser.add_argument('--reset', action='store_true', help='Iniciar otro segmento con menor presupuesto, conservando los eventos ya procesados')
+    monitor_parser.add_argument('--output', help='Archivo JSON de evidencia, cotas y datos de referencia')
+
     evaluate_parser = subparsers.add_parser('evaluate', help='Walk-forward evaluation del motor completo')
     evaluate_parser.add_argument('--session', '-s', type=int, help='ID de sesión')
     evaluate_parser.add_argument('--train-window', type=int, default=500, help='Ventana de entrenamiento')
@@ -1263,6 +1348,8 @@ Ejemplos:
         return randomness_cmd(args)
     elif args.command == 'evaluate':
         return evaluate_cmd(args)
+    elif args.command == 'monitor':
+        return monitor_cmd(args)
     elif args.command == 'kelly':
         return kelly_cmd(args)
     elif args.command == 'statistics':

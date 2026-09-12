@@ -138,8 +138,8 @@ def train_episode(
                 report = bias_analyzer.get_report()
                 if report is not None:
                     agent.set_bias_detected(
-                        report.overall_bias.value != 'none',
-                        bias_analyzer.get_hot_numbers()[:3]
+                        bias_analyzer.sequential_evidence()['rejected'],
+                        bias_analyzer.get_recommended_bets()[:3]
                     )
         
         # Update agent
@@ -259,6 +259,8 @@ def main():
                        'initial_bankroll': args.initial_bankroll, 'base_bet': args.base_bet,
                        'near_miss': args.use_near_miss, 'data_source': 'simulated',
                        'bias_detection': args.enable_bias_detection, 'bias_window': args.bias_window}
+    if args.enable_bias_detection:
+        training_config['bias_monitor_method'] = 'dirichlet_mixture_multinomial_v1'
     agent = create_agent(args)
     if args.resume:
         agent = type(agent).load(args.resume, **({'device': args.device} if args.agent_type == 'dqn' else {}))
@@ -269,9 +271,16 @@ def main():
     # Create bias analyzer if enabled
     bias_analyzer = None
     if args.enable_bias_detection:
-        bias_analyzer = WheelBiasAnalyzer(min_spins_for_analysis=args.bias_window)
+        bias_analyzer = WheelBiasAnalyzer(min_spins_for_analysis=args.bias_window, stream_id=f'hh-training:{args.seed}')
         if args.resume:
-            bias_analyzer.spin_history = list(agent.extra.get('bias_history', []))
+            if 'bias_monitor' not in agent.extra:
+                raise ValueError('The checkpoint has no sequential bias monitor state')
+            bias_analyzer = WheelBiasAnalyzer.from_state(agent.extra['bias_monitor'])
+            if (bias_analyzer.stream_id != f'hh-training:{args.seed}' or bias_analyzer.budget.alpha != .05
+                    or bias_analyzer.budget.streams != (bias_analyzer.stream_id,)
+                    or bias_analyzer.min_spins != args.bias_window or bias_analyzer.analysis_window is not None
+                    or not bias_analyzer.descriptive_reports or bias_analyzer.restart_index != 0):
+                raise ValueError('The saved bias monitor does not match the training configuration')
     
     print("=" * 70)
     print("🎰 Hyper-Heuristic Agent Training")
@@ -301,7 +310,7 @@ def main():
         # Train one episode
         result = train_episode(agent, env, args.max_steps, bias_analyzer, seed=args.seed + episode)
         if bias_analyzer is not None:
-            agent.extra['bias_history'] = list(bias_analyzer.spin_history)
+            agent.extra['bias_monitor'] = bias_analyzer.to_state()
         
         all_rewards.append(result['reward'])
         all_bankrolls.append(result['final_bankroll'])

@@ -22,6 +22,7 @@ import numpy as np
 from scipy import stats
 from .randomization import categorical_goodness_of_fit, uniformity_test
 from .multiple_testing import false_discovery_control
+from .sequential_inference import MonitoringBudget, MultinomialMonitor
 from ..settlement import validate_number
 from typing import List, Dict, Tuple, Optional, Set
 from collections import Counter
@@ -68,6 +69,7 @@ class WheelBiasReport:
     hot_sectors: List[Tuple[int, float]]   # (sector_idx, excess_frequency)
     overall_bias: BiasLevel
     recommendations: List[str]
+    sequential_evidence: Optional[Dict] = None
 
 
 def classify_bias(p_value: float) -> BiasLevel:
@@ -542,7 +544,7 @@ def generate_bias_report(spin_data: List[int]) -> WheelBiasReport:
         recommendations.append("Continue data collection")
     else:
         recommendations.append("No significant bias detected")
-        recommendations.append("Wheel appears to be fair within statistical expectations")
+        recommendations.append("Non-rejection does not establish fairness")
     
     return WheelBiasReport(
         total_spins=len(spin_data),
@@ -563,7 +565,11 @@ def print_bias_report(report: WheelBiasReport):
     print("WHEEL BIAS ANALYSIS REPORT")
     print("=" * 60)
     print(f"\nTotal Spins Analyzed: {report.total_spins}")
-    print(f"Overall Bias Level: {report.overall_bias.value.upper()}")
+    print(f"Fixed-sample evidence level: {report.overall_bias.value.upper()}")
+    if report.sequential_evidence is not None:
+        evidence = report.sequential_evidence
+        print(f"Sequential evidence: anytime p={evidence['anytime_p_value']:.6g}; allocated alpha={evidence['allocated_alpha']:.6g}; rejected={evidence['rejected']}")
+        print(evidence['interpretation'])
     
     print("\n--- Individual Test Results ---")
     
@@ -579,14 +585,14 @@ def print_bias_report(report: WheelBiasReport):
         for num, excess in report.hot_numbers[:5]:
             print(f"  Number {num:2d}: {excess*100:+.1f}% excess")
     else:
-        print("  No significantly hot numbers")
+        print("  No numbers above the descriptive frequency threshold")
     
     print("\n--- Cold Numbers ---")
     if report.cold_numbers:
         for num, excess in report.cold_numbers[:5]:
             print(f"  Number {num:2d}: {excess*100:+.1f}% deficit")
     else:
-        print("  No significantly cold numbers")
+        print("  No numbers below the descriptive frequency threshold")
     
     print("\n--- Recommendations ---")
     for rec in report.recommendations:
@@ -606,7 +612,8 @@ class WheelBiasAnalyzer:
     def __init__(
         self,
         min_spins_for_analysis: int = 100,
-        analysis_window: Optional[int] = None
+        analysis_window: Optional[int] = None,
+        *, stream_id: str = 'wheel', alpha: float = .05, streams=None, descriptive_reports: bool = True
     ):
         """
         Initialize the analyzer.
@@ -617,6 +624,14 @@ class WheelBiasAnalyzer:
         """
         self.min_spins = min_spins_for_analysis
         self.analysis_window = analysis_window
+        self.descriptive_reports = descriptive_reports
+        if self.min_spins < 1 or (analysis_window is not None and analysis_window < 1):
+            raise ValueError('Analysis windows must be positive')
+        self.stream_id = stream_id
+        self.budget = MonitoringBudget(alpha, tuple(streams) if streams is not None else (stream_id,))
+        self.restart_index = 0
+        self.monitor = MultinomialMonitor(stream_id, alpha=self.budget.allocation(stream_id))
+        self._seen_events = {}
         self.spin_history = []
         self._last_report = None
     
@@ -625,7 +640,7 @@ class WheelBiasAnalyzer:
         """Total number of spins recorded."""
         return len(self.spin_history)
     
-    def add_spin(self, number: int) -> Optional[WheelBiasReport]:
+    def add_spin(self, number: int, *, event_id: Optional[str] = None) -> Optional[WheelBiasReport]:
         """
         Add a new spin and optionally update analysis.
         
@@ -635,17 +650,30 @@ class WheelBiasAnalyzer:
         Returns:
             Updated report if enough data, None otherwise
         """
-        if not 0 <= number <= 36:
-            raise ValueError(f"Invalid number: {number}")
-        
+        number = validate_number(number)
+        if event_id is None:
+            index = len(self._seen_events)
+            event_id = f'{self.stream_id}:auto:{index}'
+            while event_id in self._seen_events:
+                index += 1
+                event_id = f'{self.stream_id}:auto:{index}'
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError('A nonempty event ID is required')
+        if event_id in self._seen_events:
+            if self._seen_events[event_id] != number:
+                raise ValueError('The event ID was already recorded with a different outcome')
+            return self._last_report
+        self.monitor.update(number, event_id=event_id)
+        self._seen_events[event_id] = number
         self.spin_history.append(number)
         
         # Only analyze if we have enough data
-        if len(self.spin_history) >= self.min_spins:
+        if self.descriptive_reports and len(self.spin_history) >= self.min_spins:
             data = self.spin_history
             if self.analysis_window:
                 data = self.spin_history[-self.analysis_window:]
             self._last_report = generate_bias_report(data)
+            self._last_report.sequential_evidence = self.sequential_evidence()
             return self._last_report
         
         return None
@@ -667,36 +695,56 @@ class WheelBiasAnalyzer:
         return []
     
     def get_recommended_bets(self) -> List[int]:
-        """
-        Get recommended numbers to bet on based on detected bias.
-        
-        Only returns recommendations if bias is moderate or stronger.
-        """
-        if not self._last_report:
+        if not self.monitor.snapshot()['rejected']:
             return []
-        
-        if self._last_report.overall_bias in [BiasLevel.MODERATE, BiasLevel.STRONG, BiasLevel.EXTREME]:
-            # Return hot numbers + numbers in hot sectors
-            recommended = set()
-            
-            for num, _ in self._last_report.hot_numbers[:3]:
-                recommended.add(num)
-            
-            for sector_idx, _ in self._last_report.hot_sectors[:1]:
-                sector_size = 37 / 8
-                start = int(sector_idx * sector_size)
-                end = int((sector_idx + 1) * sector_size)
-                for pos in range(start, min(end, 37)):
-                    recommended.add(EUROPEAN_WHEEL_ORDER[pos])
-            
-            return list(recommended)
-        
-        return []
+        candidates = [(number, self.monitor.probability_bounds([number])[0]) for number in range(37)]
+        return [number for number, lower in sorted(candidates, key=lambda item: (-item[1], item[0])) if lower > 1 / 36]
+
+    def sequential_evidence(self):
+        return dict(self.monitor.snapshot(), total_alpha=self.budget.alpha,
+                    streams=list(self.budget.streams), restart_index=self.restart_index)
+
+    def to_state(self):
+        return {'schema_version': 1, 'stream_id': self.stream_id, 'alpha': self.budget.alpha,
+                'streams': list(self.budget.streams), 'restart_index': self.restart_index,
+                'min_spins': self.min_spins, 'analysis_window': self.analysis_window, 'descriptive_reports': self.descriptive_reports,
+                'seen_events': list(self._seen_events.items()), 'monitor': self.monitor.to_state()}
+
+    @classmethod
+    def from_state(cls, state):
+        if state.get('schema_version') != 1:
+            raise ValueError('Unsupported wheel analyzer state')
+        analyzer = cls(state['min_spins'], state['analysis_window'], stream_id=state['stream_id'],
+                       alpha=state['alpha'], streams=state['streams'], descriptive_reports=state['descriptive_reports'])
+        allocated = analyzer.budget.allocation(analyzer.stream_id, state['restart_index'])
+        analyzer.restart_index = state['restart_index']
+        analyzer.monitor = MultinomialMonitor.from_state(state['monitor'], stream_id=analyzer.stream_id)
+        if analyzer.monitor.alpha != allocated:
+            raise ValueError('The saved monitor does not match the declared error budget')
+        for event_id, number in state['seen_events']:
+            if not isinstance(event_id, str) or not event_id or event_id in analyzer._seen_events:
+                raise ValueError('Invalid event registry in wheel analyzer state')
+            analyzer._seen_events[event_id] = validate_number(number)
+        for event_id, number in state['monitor']['events']:
+            if analyzer._seen_events.get(event_id) != number:
+                raise ValueError('The saved monitor is inconsistent with its event registry')
+            analyzer.spin_history.append(number)
+        current = [tuple(item) for item in state['monitor']['events']]
+        seen = list(analyzer._seen_events.items())
+        if (current and current != seen[-len(current):]) or (analyzer.restart_index == 0 and current != seen):
+            raise ValueError('The saved segment is not the expected suffix of the event registry')
+        if analyzer.descriptive_reports and len(analyzer.spin_history) >= analyzer.min_spins:
+            data = analyzer.spin_history[-analyzer.analysis_window:] if analyzer.analysis_window else analyzer.spin_history
+            analyzer._last_report = generate_bias_report(data)
+            analyzer._last_report.sequential_evidence = analyzer.sequential_evidence()
+        return analyzer
     
     def reset(self):
         """Reset the analyzer."""
         self.spin_history = []
         self._last_report = None
+        self.restart_index += 1
+        self.monitor = MultinomialMonitor(self.stream_id, alpha=self.budget.allocation(self.stream_id, self.restart_index))
 
 
 def formal_chi_square_test(

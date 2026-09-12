@@ -127,9 +127,14 @@ Resume requires matching training configuration. Exact continuation is tested on
 ## Statistical diagnostics and capture
 
 ```powershell
+python roulette_cli.py monitor --sessions 1 2 --state models/wheel-monitor.json --output reports/wheel-monitor.json
 python roulette_cli.py randomness --session 1 --resamples 9999 --seed 42 --fdr-method by
 python roulette_cli.py heatmaps --session 1 --output-dir reports/heatmaps/session_1
 ```
+
+`monitor` maintains sequential Dirichlet-mixture evidence against conditional uniformity. Declare the session family before inspecting outcomes and reuse the same state file. The total error budget is divided across sessions and restart indices `r` as `alpha / (sessions * (r+1) * (r+2))`; the first segment receives half of each session's budget. Repeated calls count only new spin IDs. Changed, deleted or reordered recorded outcomes are rejected. `--reset` spends the next allocation and starts an empty segment while preserving deduplication. Starting another state file does not replenish the statistical budget.
+
+The report includes confidence-region projections for pocket probabilities and candidates whose simultaneous lower bound exceeds the straight-bet break-even probability `1/36`. These bounds require fixed conditional probabilities throughout the monitored segment. Rejecting uniformity does not establish a persistent or profitable advantage. HH training with `--enable-bias-detection` consumes the sequential signal and preserves its monitor in checkpoints; older bias-enabled checkpoints without this state cannot resume.
 
 Sparse frequency tables use multinomial Monte Carlo; sufficiently populated tables use chi-square asymptotics. Temporal dependence and scanned drift statistics use whole-sequence permutations, recalculating the scan in each permutation. Entropy drift compares windows with one another, so a stable nonuniform distribution does not automatically imply drift.
 
