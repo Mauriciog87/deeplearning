@@ -149,3 +149,23 @@ Each payoff has squared norm at most 3. If the achieved pre-outcome halfspace up
 | Reconcile source attributions and exclusions | README and `arxiv_paper_memory.md` distinguish exact formulas from adaptations. Physical prediction, unsupported TSFM additions and unnecessary IPS/DR remain excluded for the reasons in the original audit. No experiment is automatically promoted. |
 
 The final measured campaign results and full-suite outcome are recorded below when execution finishes. Real-data validation cannot establish superiority at this point: a read-only audit found zero sessions, spins and predictions. Capture configuration SHA-256 was `8292b5b495d2dd5b89557ec7586c75065c11f589bc29b32cdafd6e79041a0c72`; none of the research changes modifies that configuration or the user database.
+
+### Core campaign results
+
+Command: `C:/Python312/python.exe -B roulette_cli.py research --seed 20260912 --trials 20 --observations 1000 --output research/results/core-20260912.json`.
+
+The command exited successfully after 1,238.6 seconds. [The JSON artifact](research/results/core-20260912.json) contains 160 trials and 160,000 test observations, plus their separate reference/calibration prefixes. All 14 recorded runtime source hashes match the checkout. No trial was removed.
+
+| Measurement | Result |
+|---|---|
+| Uniform-null alarms | 0/20 for multinomial, KT, e-SR, e-CUSUM, reference CTM and joint diagnostic; 1/20 for PITMonitor. Exact 95% intervals are [0, 0.1684] and [0.0013, 0.2487], respectively. These finite samples are consistent with the contracts but cannot establish a 5% bound by themselves. |
+| Fixed-bias detection | Multinomial, KT, e-SR, e-CUSUM and joint diagnostic each alarmed in 20/20 trials, interval [0.8316, 1]. PIT/reference monitor stability, so fixed bias already present in the reference is a null case for them. |
+| Abrupt-change detection after the change | Multinomial 20/20, KT 5/20, e-SR/e-CUSUM 20/20 and PITMonitor 5/20. PITMonitor also had two pre-change alarms, reported separately. Multinomial and e-SR restricted mean delays were 223.4 and 72.55 observations. |
+| Gradual-change detection after the change | Multinomial 9/20, KT 0/20, e-SR/e-CUSUM 20/20 and PITMonitor 0/20. Multinomial and KT each had one pre-change alarm. Nondetections remain in restricted-delay estimates. |
+| Reference CTM power | 0/20 alarms for abrupt, gradual and calibration-improvement alternatives with the fixed 300-observation reference and chosen scalar PIT score. The finite-reference correction and limited betting family are conservative; this experiment gives no basis to promote the variant. |
+| Calibration improvement | PITMonitor detected 19/20 changes afterward and had one early alarm. An alarm therefore cannot be labeled deterioration without a separate direction/quality analysis. |
+| Probability confidence regions | Both methods covered the fixed true vector at every observation in 20/20 trials of each applicable scenario: uniform, fixed bias and calibration improvement. Mean final pocket width under uniformity was 0.0722 for the mixture and 0.1445 for KT. No fixed-probability coverage claim is made for dependent or changing conditional laws. |
+| Calibration residual bounds | Confidence, classwise and top-five conditional-residual targets were covered at all four checked counts in every trial of each scenario. This is a finite simulation check of the separately proved bound, not a population ECE estimate. |
+| Uniform-wheel policies | Frequency-based EV bet on every observation: mean realized profit -42.4 units, approximate 95% interval [-146.61, 61.81], and known conditional expected profit -27.027. The confidence-bound policy chose PASS throughout and earned zero. All PASS counterfactual totals were zero. |
+
+The strong bias scenario deliberately sets one pocket's probability to 0.15. Large positive simulated profits there illustrate the decision/settlement contract and must not be extrapolated to a real wheel. The mixture's improvement over KT and the e-detectors' change sensitivity are specific to these alternatives, priors and horizons; the trial intervals are not simultaneous over all comparisons. Reference/PIT results under stationary dependence remain labeled as violated assumptions.
