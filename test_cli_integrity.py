@@ -112,6 +112,24 @@ class CliIntegrityTests(unittest.TestCase):
                 self.assertIn('historial que solo crezca', message)
                 self.assertEqual(state_path.read_bytes(), before)
 
+    def test_recalibration_cli_exports_disjoint_partitions_and_fitted_state(self):
+        output = Path(self.folder.name) / 'calibrated.json'
+        code, _ = self.run_command('evaluate', '--session', '1', '--models', 'extra_trees', '--runs', '1',
+                                   '--train-window', '40', '--calibration-window', '20', '--test-window', '5', '--step', '5',
+                                   '--recalibrators', 'temperature', 'mcllo', 'normalized_isotonic', '--lstm-representation', 'ordinal',
+                                   '--no-intervals', '--device', 'cpu', '--output', str(output))
+        self.assertEqual(code, 0)
+        result = json.loads(output.read_text(encoding='utf-8'))
+        self.assertEqual(result['config']['lstm_representation'], 'ordinal')
+        self.assertEqual(len(result['config']['recalibrators']), 3)
+        for partition in result['manifest']['partitions']:
+            self.assertEqual(len(partition['train_spin_ids']), 20)
+            self.assertEqual(len(partition['calibration_spin_ids']), 20)
+            self.assertFalse(set(partition['calibration_spin_ids']) & set(partition['test_spin_ids']))
+        fitted = [item for item in result['manifest']['calibration_fits'] if item['status'] == 'ready']
+        self.assertGreaterEqual(len(fitted), 6)
+        self.assertTrue(all(item['state']['schema_version'] == 1 for item in fitted))
+
 
 if __name__ == '__main__':
     unittest.main()

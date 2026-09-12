@@ -13,6 +13,7 @@ from src.datasets import as_sessions, dataset_manifest
 from src.utils.temporal_statistics import adaptive_bins, calibration_error, block_bootstrap_indices
 from src.utils.calibration import CalibrationBound, fixed_bin_calibration_bound
 from src.utils.joint_calibration import JointCalibrationMonitor
+from src.utils.recalibration import CALIBRATORS, ProbabilityCalibrator
 import numpy as np
 import platform
 from importlib.metadata import version, PackageNotFoundError
@@ -59,6 +60,9 @@ class EvaluationConfig:
     models: Tuple[str, ...] = ('lstm', 'extra_trees', 'bias')
     block_length: Optional[int] = None
     lstm_representation: str = 'one_hot'
+    recalibrators: Tuple[str, ...] = ()
+    calibration_window: int = 100
+    calibrator_regularization: float = 1e-3
 
     def __post_init__(self):
         if self.training_window < 1 or self.testing_window < 1 or self.step_size < self.testing_window:
@@ -79,6 +83,17 @@ class EvaluationConfig:
             raise ValueError('Unknown model requested')
         if self.lstm_representation not in ('one_hot', 'ordinal'):
             raise ValueError('LSTM representation must be one_hot or ordinal')
+        if set(self.recalibrators) - set(CALIBRATORS) or len(set(self.recalibrators)) != len(self.recalibrators):
+            raise ValueError('Recalibrators must be known and unique')
+        if self.recalibrators and (not isinstance(self.calibration_window, int) or self.calibration_window < 20
+                                  or self.training_window - self.calibration_window < 20):
+            raise ValueError('Recalibration requires at least 20 calibration observations and 20 preceding training observations')
+        if not isfinite(self.calibrator_regularization) or self.calibrator_regularization < 0:
+            raise ValueError('Calibrator regularization must be finite and nonnegative')
+
+
+def _model_order(config):
+    return MODEL_ORDER + [f'{model}__{method}' for model in ('lstm', 'extra_trees', 'bias', 'consensus') for method in config.recalibrators]
 
 
 @dataclass
@@ -199,14 +214,14 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
     sessions = as_sessions(numbers)
     manifest = {'schema_version': 3, 'dataset': dataset_manifest(sessions),
                 'config': asdict(config), 'seeds': [config.seed + run for run in range(config.runs)],
-                'python': platform.python_version(), 'packages': {}, 'partitions': [],
+                'python': platform.python_version(), 'packages': {}, 'partitions': [], 'calibration_fits': [],
                 'log_loss_probability_floor': EPSILON,
                 'interval_assumptions': 'Conditional on this dataset; approximately stationary circular temporal blocks within sessions, shared across resampled training seeds. Not evidence of future profit.'}
     manifest['calibration_inference'] = {
         'method': 'hilbert_azuma_dyadic_v1',
         'target': CalibrationBound().target,
         'bin_edges': np.linspace(0, 1, config.ece_bins + 1).tolist(),
-        'model_family_size': len(MODEL_ORDER),
+        'model_family_size': len(_model_order(config)),
         'metric_family_size': 3 + len(set(config.top_k) - {1}),
         'assumptions': 'All configured runs share the same outcomes. Forecasts, rankings and observation inclusion are chosen before each outcome. Bins and configuration are fixed before evaluation.',
         'coverage': 'Simultaneous over time, the declared model family, confidence/classwise/top-set summaries and the conditional joint-vector diagnostic; conditional on the configured training runs. No guarantee across data-selected configurations.',
@@ -236,7 +251,7 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
         if len(session.numbers) < required:
             warnings.append(f'Session {session.session_id}: need {required} observations, received {len(session.numbers)}.')
             continue
-        balances = {(run, model): config.initial_bankroll for run in range(config.runs) for model in MODEL_ORDER}
+        balances = {(run, model): config.initial_bankroll for run in range(config.runs) for model in _model_order(config)}
         monitors = {}
         consumed = {}
         if config.include_baselines:
@@ -246,9 +261,11 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
         for start in range(0, len(session.numbers) - required + 1, config.step_size):
             test_start = start + config.training_window
             test_end = test_start + config.testing_window
-            train_data = list(session.numbers[start:test_start])
+            fit_end = test_start - config.calibration_window if config.recalibrators else test_start
+            train_data = list(session.numbers[start:fit_end])
             manifest['partitions'].append({'fold': fold, 'session_id': session.session_id,
-                'train_spin_ids': list(session.spin_ids[start:test_start]),
+                'train_spin_ids': list(session.spin_ids[start:fit_end]),
+                'calibration_spin_ids': list(session.spin_ids[fit_end:test_start]),
                 'test_spin_ids': list(session.spin_ids[test_start:test_end])})
             for run in range(config.runs):
                 if cancel_event is not None and cancel_event.is_set():
@@ -263,6 +280,8 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
                 requested_fit = tuple(model for model in config.models if model in ('lstm', 'extra_trees'))
                 if requested_fit:
                     engine.train_sync(epochs=config.lstm_epochs, models=requested_fit, cancel_event=cancel_event)
+                calibrators = _fit_calibrators(engine, session, fit_end, test_start, fold, run, config,
+                                              manifest['calibration_fits'], cancel_event)
                 policy_reason = None
                 if 'dqn' in config.models:
                     policy_reason = _check_policy_partition(engine, session, test_start, test_end, config)
@@ -274,6 +293,15 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
                         raise RuntimeError('Evaluation cancelled')
                     actual = session.numbers[index]
                     emitted = _engine_rows(engine, fold, index, actual, config)
+                    calibrated_rows = []
+                    for row in emitted:
+                        for method in config.recalibrators:
+                            calibrator = calibrators.get((row.model, method))
+                            if calibrator is not None:
+                                vector = calibrator.transform([[row.number_probs[number] for number in range(37)]])[0]
+                                calibrated_rows.append(_row_from_probs(fold, index, f'{row.model}__{method}', actual,
+                                                                       dict(enumerate(vector)), config))
+                    emitted.extend(calibrated_rows)
                     if 'dqn' in config.models and not policy_reason:
                         decision = engine.get_policy_decision(balances[(run, 'dqn')], config.initial_bankroll, config.unit_stake)
                         engine.statuses[PredictorType.DQN] = decision.status
@@ -321,6 +349,39 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
             summary.reason = '; '.join(sorted(set(reason for reason in reasons if reason))) or 'No evaluable predictions'
     return WalkForwardEvaluationResult(config, fold, summaries, warnings, rows,
                                        _assess_ope_readiness(rows), manifest, statuses)
+
+
+def _fit_calibrators(engine, session, fit_end, test_start, fold, run, config, reports, cancel_event):
+    if not config.recalibrators:
+        return {}
+    forecasts = defaultdict(list)
+    for index in range(fit_end, test_start):
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError('Evaluation cancelled')
+        actual = session.numbers[index]
+        for row in _engine_rows(engine, fold, index, actual, config):
+            forecasts[row.model].append(row)
+        engine.add_number(actual)
+    calibrated = {}
+    for model in ('lstm', 'extra_trees', 'bias', 'consensus'):
+        if model not in config.models and model != 'consensus':
+            continue
+        records = forecasts[model]
+        for method in config.recalibrators:
+            metadata = {'fold': fold, 'run_id': run, 'session_id': session.session_id, 'model': model, 'method': method,
+                        'calibration_spin_ids': list(session.spin_ids[fit_end:test_start])}
+            if len(records) != config.calibration_window:
+                reports.append(dict(metadata, status='unavailable', reason='The model did not emit every forecast in the calibration partition'))
+                continue
+            try:
+                calibrator = ProbabilityCalibrator(method, regularization=config.calibrator_regularization)
+                report = calibrator.fit([[row.number_probs[number] for number in range(37)] for row in records],
+                                        [row.actual for row in records])
+                calibrated[(model, method)] = calibrator
+                reports.append(dict(metadata, status='ready', fit=report, state=calibrator.to_state()))
+            except (ImportError, ValueError, RuntimeError) as error:
+                reports.append(dict(metadata, status='unavailable', reason=str(error)))
+    return calibrated
 
 
 def _check_policy_partition(engine, session, test_start, test_end, config):
@@ -701,7 +762,7 @@ def _calibration_inference(rows, config):
     if not np.all(actual == actual[0]):
         raise ValueError('Training runs disagree about an observed outcome')
     probabilities = np.asarray([[[row.number_probs[n] for n in range(37)] for row in run] for run in aligned])
-    alpha = (1 - config.confidence_level) / (len(MODEL_ORDER) * (len(names) + 1))
+    alpha = (1 - config.confidence_level) / (len(_model_order(config)) * (len(names) + 1))
     confidence = np.asarray([[row.confidence for row in run] for run in aligned])[:, :, None]
     hits = np.asarray([[_row_exact_hit(row) for row in run] for run in aligned])[:, :, None]
     result = {'confidence': fixed_bin_calibration_bound(confidence, hits, bins=config.ece_bins, alpha=alpha),
@@ -757,14 +818,14 @@ def _summarize_rows(rows, config, total_evaluation_spins, cancel_event=None):
             calibration_bins=_calibration_bins(forecasts, config.ece_bins),
             net_profit=sum(row.profit for row in model_rows) / runs,
             total_stake=sum(_row_stake(row, config.bet_top_n) for row in model_rows) / runs,
-            training_runs=(runs if model in ('lstm', 'extra_trees') or
+            training_runs=(runs if '__' in model or model in ('lstm', 'extra_trees') or
                            (model == 'consensus' and set(config.models) & {'lstm', 'extra_trees'})
                            else 1 if model == 'dqn' else 0), evaluated_rows=len(model_rows),
             reason='Policy only; forecast scores are not applicable.' if not forecasts else '',
         )
     _attach_model_comparisons(summaries, grouped, config, cancel_event)
     if total_evaluation_spins:
-        for model in MODEL_ORDER:
+        for model in _model_order(config):
             if model not in summaries:
                 summaries[model] = ModelEvaluationSummary(
                     spins=0, exact_accuracy=None, top_k_hit_rates={k: None for k in config.top_k},
