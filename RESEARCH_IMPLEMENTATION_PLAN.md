@@ -69,6 +69,10 @@ Baseline: `7f6d915`. Scope: implement the recommendations from the paper audit, 
 
 - Stage 3: added full-information rewards and expected-value policies for all 47 actions, with PASS, bankroll constraints and optional simultaneous confidence-region bounds. Walk-forward evaluation records their decisions before consuming outcomes. Corrected both legacy probability helpers to use `1/36` and exact fixed-sample family intervals; retained Wilson intervals as descriptive fields. The OU helper exposes the analytical IID overlap null and no longer invents a positive drift coefficient for a constant series. `C:/Python312/python.exe -B -m unittest test_expected_value test_evaluation_harness test_calibration_contract test_cli_integrity test_temporal_evaluation test_settlement_environment -v`: 46 tests passed.
 
+- Stage 1c: added a full-vector cell diagnostic and predictable alternative likelihood process. The sequential null is explicitly conditional predictive correctness, stronger than calibration given only the forecast. A 6,000-row counterexample has zero confidence and classwise ECE but joint-cell TV 0.1 and rejection. Formula, null-simulation, save/replay, impossible-support, missing-cohort and shared-seed tests pass. The evaluation manifest includes the joint diagnostic in the predetermined model/metric budget. This is an alternative diagnostic, not a claimed reproduction of a paper's omnibus calibration test.
+
+`C:/Python312/python.exe -B -m unittest test_joint_calibration test_calibration_contract test_evaluation_harness test_cli_integrity -v`: 34 tests passed.
+
 ## Calibration-bound derivation
 
 This is an alternative construction, not a reproduction of the population l2-ECE interval. The source concentration inequality is [Pinelis, Theorem 3.5](https://arxiv.org/abs/1208.2200v2). It bounds the maximum norm of a Hilbert-space martingale with increments of norm at most `L` through horizon `H` by `2 exp(-r^2 / (2 H L^2))`. The current arXiv text includes the paper's corrections; this construction uses the bounded-increment theorem, not its Bernstein variants.

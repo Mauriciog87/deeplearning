@@ -12,6 +12,7 @@ from src.utils.sequential_inference import MonitoringBudget, MultinomialMonitor
 from src.datasets import as_sessions, dataset_manifest
 from src.utils.temporal_statistics import adaptive_bins, calibration_error, block_bootstrap_indices
 from src.utils.calibration import CalibrationBound, fixed_bin_calibration_bound
+from src.utils.joint_calibration import JointCalibrationMonitor
 import numpy as np
 import platform
 from importlib.metadata import version, PackageNotFoundError
@@ -157,6 +158,7 @@ class ModelEvaluationSummary:
     classwise_ece: float = 0.0
     top_k_ece: Dict[int, float] = field(default_factory=dict)
     calibration_bounds: Dict[str, CalibrationBound] = field(default_factory=dict)
+    joint_calibration: Dict = field(default_factory=dict)
     calibration_bins: List[CalibrationBin] = field(default_factory=list)
     comparisons: Dict[str, ModelComparisonSummary] = field(default_factory=dict)
     status: str = 'ready'
@@ -202,10 +204,14 @@ def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, ca
         'target': CalibrationBound().target,
         'bin_edges': np.linspace(0, 1, config.ece_bins + 1).tolist(),
         'model_family_size': len(MODEL_ORDER),
-        'metric_family_size': 2 + len(set(config.top_k) - {1}),
+        'metric_family_size': 3 + len(set(config.top_k) - {1}),
         'assumptions': 'All configured runs share the same outcomes. Forecasts, rankings and observation inclusion are chosen before each outcome. Bins and configuration are fixed before evaluation.',
-        'coverage': 'Simultaneous over time, the declared model family, and confidence/classwise/top-set summaries; conditional on the configured training runs. No guarantee across data-selected configurations.',
+        'coverage': 'Simultaneous over time, the declared model family, confidence/classwise/top-set summaries and the conditional joint-vector diagnostic; conditional on the configured training runs. No guarantee across data-selected configurations.',
         'interpretation': 'Conservative bounds for predictable fixed-bin residuals, not population l2-ECE intervals or proof of joint calibration. Adaptive ECE remains descriptive.',
+        'joint_method': 'predictable_joint_cell_likelihood_v1',
+        'joint_resolution': 10,
+        'joint_prior_strength': 10.0,
+        'joint_null': 'Every run forecasts the full conditional outcome law given the monitored past and current forecasts; stronger than marginal or classwise calibration',
     }
     manifest['decision_inference'] = {
         'expected_value': 'Choose among all 47 actions from smoothed history frequencies, including PASS; no uncertainty guarantee',
@@ -377,6 +383,13 @@ def format_evaluation_report(result: WalkForwardEvaluationResult) -> str:
                     lines.append(f'{model} {name}: {value(bound.point)} [{value(bound.lower)}, {value(bound.upper)}]; unique outcomes={bound.observations}')
                 else:
                     lines.append(f'{model} {name}: unavailable ({bound.reason})')
+        lines.append('JOINT-VECTOR DIAGNOSTIC: tests conditional predictive correctness, a stronger null than calibration given only the forecast. Cell TV is descriptive; non-rejection does not certify calibration.')
+        for model, summary in result.per_model_summaries.items():
+            joint = summary.joint_calibration
+            if joint.get('status') == 'ready':
+                lines.append(f"{model}: joint-cell TV {value(joint['joint_cell_total_variation'])}; sequential p {joint['anytime_p_value']:.6g}; alpha {joint['allocated_alpha']:.6g}; rejected={joint['rejected']}")
+            elif joint:
+                lines.append(f"{model}: joint diagnostic unavailable ({joint['reason']})")
     lines.append(f'PAIRED IMPROVEMENT VS {result.config.comparison_baseline}')
     for model, summary in result.per_model_summaries.items():
         for metric, comparison in summary.comparisons.items():
@@ -665,9 +678,9 @@ def _interval(point, values, config):
     return MetricInterval(point, lower, upper)
 
 
-def _calibration_bounds(rows, config):
+def _calibration_inference(rows, config):
     if not rows or not config.compute_intervals:
-        return {}
+        return {}, {}
     names = ['confidence', 'classwise'] + [f'top_{k}' for k in sorted(set(config.top_k) - {1})]
     runs = defaultdict(dict)
     for row in rows:
@@ -677,13 +690,14 @@ def _calibration_bounds(rows, config):
         runs[row.run_id][identity] = row
     keys = sorted(next(iter(runs.values())))
     if set(runs) != set(range(config.runs)) or any(set(run) != set(keys) for run in runs.values()):
-        return {name: CalibrationBound(reason='All configured runs must cover the same observations') for name in names}
+        reason = 'All configured runs must cover the same observations'
+        return {name: CalibrationBound(reason=reason) for name in names}, {'status': 'unavailable', 'reason': reason}
     aligned = [[runs[run][key] for key in keys] for run in range(config.runs)]
     actual = np.asarray([[row.actual for row in run] for run in aligned])
     if not np.all(actual == actual[0]):
         raise ValueError('Training runs disagree about an observed outcome')
     probabilities = np.asarray([[[row.number_probs[n] for n in range(37)] for row in run] for run in aligned])
-    alpha = (1 - config.confidence_level) / (len(MODEL_ORDER) * len(names))
+    alpha = (1 - config.confidence_level) / (len(MODEL_ORDER) * (len(names) + 1))
     confidence = np.asarray([[row.confidence for row in run] for run in aligned])[:, :, None]
     hits = np.asarray([[_row_exact_hit(row) for row in run] for run in aligned])[:, :, None]
     result = {'confidence': fixed_bin_calibration_bound(confidence, hits, bins=config.ece_bins, alpha=alpha),
@@ -693,7 +707,10 @@ def _calibration_bounds(rows, config):
         mass = np.asarray([[sum(p for _, p in row.top_numbers[:k]) for row in run] for run in aligned])[:, :, None]
         found = np.asarray([[_row_top_hit(row, k) for row in run] for run in aligned])[:, :, None]
         result[f'top_{k}'] = fixed_bin_calibration_bound(mass, found, bins=config.ece_bins, alpha=alpha)
-    return result
+    joint = JointCalibrationMonitor(runs=config.runs, alpha=alpha)
+    for index, identity in enumerate(keys):
+        joint.update(probabilities[:, index, :], int(actual[0, index]), event_id=str(identity))
+    return result, joint.snapshot()
 
 
 def _summarize_rows(rows, config, total_evaluation_spins, cancel_event=None):
@@ -717,6 +734,7 @@ def _summarize_rows(rows, config, total_evaluation_spins, cancel_event=None):
             trajectories[(row.run_id, row.session_id)].append(row.profit)
         runs = len({row.run_id for row in model_rows})
         forecasts = [row for row in model_rows if row.kind == 'forecast']
+        calibration_bounds, joint_calibration = _calibration_inference(forecasts, config)
         summaries[model] = ModelEvaluationSummary(
             spins=len({(row.session_id, row.spin_id or row.index) for row in model_rows}),
             exact_accuracy=points['exact_accuracy'],
@@ -730,7 +748,8 @@ def _summarize_rows(rows, config, total_evaluation_spins, cancel_event=None):
             log_loss_interval=intervals['log_loss'], brier_interval=intervals['brier'],
             roi_interval=intervals['roi'], classwise_ece=points['classwise_ece'],
             top_k_ece={k: points[f'top_{k}_ece'] for k in config.top_k},
-            calibration_bounds=_calibration_bounds(forecasts, config),
+            calibration_bounds=calibration_bounds,
+            joint_calibration=joint_calibration,
             calibration_bins=_calibration_bins(forecasts, config.ece_bins),
             net_profit=sum(row.profit for row in model_rows) / runs,
             total_stake=sum(_row_stake(row, config.bet_top_n) for row in model_rows) / runs,
