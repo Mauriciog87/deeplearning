@@ -1,5 +1,6 @@
 from contextlib import redirect_stdout
 from dataclasses import replace
+from importlib.util import find_spec
 import io
 import json
 from pathlib import Path
@@ -112,6 +113,7 @@ class CliIntegrityTests(unittest.TestCase):
                 self.assertIn('historial que solo crezca', message)
                 self.assertEqual(state_path.read_bytes(), before)
 
+    @unittest.skipUnless(find_spec('sklearn') is not None, 'Recalibration comparison requires optional scikit-learn')
     def test_recalibration_cli_exports_disjoint_partitions_and_fitted_state(self):
         output = Path(self.folder.name) / 'calibrated.json'
         code, _ = self.run_command('evaluate', '--session', '1', '--models', 'extra_trees', '--runs', '1',
