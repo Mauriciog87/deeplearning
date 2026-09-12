@@ -133,11 +133,11 @@ class EvaluationHarnessTest(unittest.TestCase):
 
         self.assertEqual(sum(item.count for item in fair.calibration_bins), fair.spins)
         self.assertEqual(len(fair.calibration_bins), 1)
-        self.assertGreaterEqual(fair.ece_interval.lower, 0)
-        self.assertLessEqual(fair.ece_interval.lower, fair.ece_interval.upper)
+        self.assertGreaterEqual(fair.calibration_bounds['confidence'].lower, 0)
+        self.assertLessEqual(fair.calibration_bounds['confidence'].lower, fair.calibration_bounds['confidence'].upper)
         self.assertIn(5, fair.top_k_ece)
 
-    def test_full_and_top_k_calibration_are_zero_for_exactly_fair_rows(self):
+    def test_classwise_and_top_set_calibration_are_zero_for_exactly_fair_rows(self):
         fair_probs = {number: 1.0 / 37.0 for number in range(37)}
         fair_top = [(number, fair_probs[number]) for number in range(37)]
         rows = [

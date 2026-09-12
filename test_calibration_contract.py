@@ -3,8 +3,9 @@ import unittest
 
 import numpy as np
 
-from src.utils.evaluation_harness import EvaluationConfig, PredictionEvaluationRow, _metric_values
+from src.utils.evaluation_harness import EvaluationConfig, PredictionEvaluationRow, _metric_values, _summarize_rows
 from src.utils.temporal_statistics import adaptive_bins
+from src.utils.calibration import fixed_bin_calibration_bound, hilbert_mean_radius
 
 
 def forecast_row(index, probabilities, actual, run_id=0):
@@ -47,6 +48,83 @@ class CalibrationContractTests(unittest.TestCase):
     def test_tied_confidences_are_not_split(self):
         bins = adaptive_bins([.1] * 39 + [.8] * 21, [0] * 60)
         self.assertEqual([entry[2] for entry in bins], [39, 21])
+
+    def test_fair_predictor_bounds_include_zero_without_bootstrap(self):
+        outcomes = np.random.default_rng(20260912).integers(0, 37, 200)
+        rows = [forecast_row(index, np.full(37, 1 / 37), int(actual))
+                for index, actual in enumerate(outcomes)]
+        config = EvaluationConfig(runs=1, models=(), bootstrap_resamples=0)
+        result = _summarize_rows(rows, config, len(rows))['example']
+        for bound in result.calibration_bounds.values():
+            self.assertEqual(bound.lower, 0)
+            self.assertGreaterEqual(bound.upper, bound.point)
+            self.assertEqual(bound.status, 'available')
+            self.assertIn('conditional residual', bound.target)
+
+    def test_replication_does_not_change_calibration_bounds(self):
+        rows = [forecast_row(index, np.full(37, 1 / 37), index % 37) for index in range(200)]
+        repeated = [replace(row, run_id=run) for run in range(5) for row in rows]
+        def summarize(data, runs):
+            return _summarize_rows(data, EvaluationConfig(runs=runs, models=(), bootstrap_resamples=0), len(data))['example']
+        single, multiple = summarize(rows, 1), summarize(repeated, 5)
+        for name, first in single.calibration_bounds.items():
+            other = multiple.calibration_bounds[name]
+            for field in ('point', 'lower', 'upper', 'allocated_alpha', 'observations'):
+                self.assertAlmostEqual(getattr(first, field), getattr(other, field), places=14)
+
+    def test_incomplete_seed_cohort_cannot_claim_bounds(self):
+        rows = [forecast_row(index, np.full(37, 1 / 37), index % 37) for index in range(200)]
+        result = _summarize_rows(rows, EvaluationConfig(runs=5, models=(), bootstrap_resamples=0), 200)['example']
+        self.assertTrue(result.calibration_bounds)
+        for bound in result.calibration_bounds.values():
+            self.assertEqual(bound.status, 'unavailable')
+            self.assertIsNone(bound.lower)
+
+    def test_bounds_cover_known_conditional_targets_with_dependent_outcomes(self):
+        rng = np.random.default_rng(2917)
+        failures = 0
+        for _ in range(100):
+            truth, forecasts, outcomes = [], [], []
+            previous = 0
+            for index in range(1000):
+                probability = .15 + .65 * previous
+                prediction = .35 + .2 * previous
+                actual = int(rng.random() < probability)
+                truth.append(probability)
+                forecasts.append(prediction)
+                outcomes.append(actual)
+                previous = actual
+            for count in (100, 250, 500, 1000):
+                predicted = np.array(forecasts[:count])[None, :, None]
+                observed = np.array(outcomes[:count])[None, :, None]
+                bound = fixed_bin_calibration_bound(predicted, observed, bins=10, alpha=.05)
+                groups = (predicted[0, :, 0] * 10).astype(int)
+                residual = np.array(truth[:count]) - predicted[0, :, 0]
+                target = np.abs(np.bincount(groups, weights=residual, minlength=10)).sum() / count
+                if not bound.lower <= target <= bound.upper:
+                    failures += 1
+                    break
+        from scipy.stats import binom
+        self.assertLessEqual(failures, int(binom.ppf(.995, 100, .05)))
+
+    def test_bounds_detect_large_known_error_and_contract_with_data(self):
+        widths = []
+        for count in (4096, 16384):
+            bound = fixed_bin_calibration_bound(np.full((1, count, 1), .1), np.ones((1, count, 1)))
+            self.assertLessEqual(bound.lower, .9)
+            self.assertGreaterEqual(bound.upper, .9)
+            self.assertGreater(bound.lower, .5)
+            widths.append(bound.upper - bound.lower)
+        self.assertLess(widths[1], widths[0])
+
+    def test_categorical_contract_rejects_non_distribution_channels(self):
+        with self.assertRaises(ValueError):
+            fixed_bin_calibration_bound(np.full((1, 20, 37), .5), np.zeros((1, 20, 37)), categorical=True)
+
+    def test_radius_rejects_invalid_configuration(self):
+        for count, alpha in ((0, .05), (1.5, .05), (True, .05), (20, 0), (20, 1)):
+            with self.subTest(count=count, alpha=alpha), self.assertRaises(ValueError):
+                hilbert_mean_radius(count, alpha)
 
 
 if __name__ == '__main__':

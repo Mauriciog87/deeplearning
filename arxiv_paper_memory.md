@@ -2,6 +2,8 @@
 
 Fecha de lectura: 2026-06-16
 
+Revision de implementacion: 2026-09-12. Las decisiones de lectura distinguen inspiracion de reproduccion del metodo. El harness actual usa ECE descriptivo por ejecucion y cotas separadas para residuos condicionales en bins fijos; no implementa los intervalos poblacionales l2 de Sun et al. El contrato y los avances estan en `RESEARCH_IMPLEMENTATION_PLAN.md`.
+
 Objetivo: usar papers como memoria tecnica para mejorar el motor de ruleta sin vender prediccion magica. La prioridad actual es diagnostico estadistico, deteccion de drift, calibracion y evaluacion robusta. Los modelos pesados quedan fuera hasta que exista volumen de datos y un baseline clasico fuerte.
 
 Fuentes usadas: PDFs de `https://arxiv.org/pdf/{id}`, metadata de arXiv API, y busquedas puntuales en arXiv para titulos cuando el PDF no extrajo metadata limpia.
@@ -10,9 +12,9 @@ Fuentes usadas: PDFs de `https://arxiv.org/pdf/{id}`, metadata de arXiv API, y b
 
 implement_now:
 - `1609.09601`: walk-forward, backtesting y sesgo como trading cuantitativo.
-- `2108.13264`: intervalos bootstrap, comparaciones pareadas y probabilidad de mejora.
+- `2108.13264`: bootstrap temporal adaptado y comparaciones pareadas. La fraccion de remuestreos positivos no es la metrica de probabilidad de mejora del paper.
 - `2109.03480`: ECE con bins/reliability y cuidado con estimadores.
-- `2408.08998`: intervalos para ECE y top-1-to-k/full calibration.
+- `2408.08998`: referencia sobre sesgo y limites de la inferencia de calibracion; sus intervalos l2 no estan reproducidos.
 - `1706.03415`, `2602.13848`, `2407.07290`: usar inspiracion de cambio de distribucion, pero con ventanas y tests simples.
 - `2212.00173`: usar idea de robustez ante mismatch, no SPADE completo.
 - `2403.18716`, `2001.11838`: suite de tests de aleatoriedad reproducible.
@@ -95,7 +97,7 @@ Lectura tecnica: compara estimadores de ECE y muestra que la evaluacion de calib
 
 Supuestos: clasificacion probabilistica con scores comparables. Encaja directamente con predictores que devuelven `all_probabilities`.
 
-Aplicacion ahora: mantener bins, agregar intervalos y reportar full calibration. No convertir ECE en una unica verdad; usarlo junto a log loss y Brier.
+Aplicacion actual: mantener ECE descriptivo por bins, junto a log loss y Brier. El estimador KDE del paper no esta implementado. La calibracion por clase no equivale a calibracion conjunta del vector completo.
 
 ## `2408.08998` - A Confidence Interval for the l2 Expected Calibration Error
 
@@ -103,9 +105,9 @@ Decision: implement_now.
 
 Lectura tecnica: desarrolla intervalos para ECE l2 y cubre top-1-to-k calibration, incluyendo confidence calibration y full calibration. La idea que importa aqui es que ECE tambien necesita incertidumbre, no solo un numero.
 
-Supuestos: suficientes muestras por bin y estimacion estadistica cuidadosa. En ruleta, 37 clases hacen que los bins sean esparsos, por lo que conviene bootstrap pragmatica antes que formulas asintoticas complejas.
+Supuestos: el estimador corregido y sus intervalos requieren el diseno y las condiciones del paper. Tener suficientes muestras por bin no justifica reemplazarlos por un bootstrap percentil de ECE L1. Esa sustitucion fallo incluso para un predictor uniforme perfectamente calibrado.
 
-Aplicacion ahora: agregar intervalo bootstrap para ECE, ECE top-k y full multiclass ECE sobre todas las probabilidades.
+Aplicacion actual: retirar esos intervalos bootstrap y ofrecer cotas conservadoras para un objetivo diferente y explicito: residuos condicionales acumulados en bins fijos. El ECE adaptativo sigue siendo descriptivo. La masa del conjunto top-k tampoco equivale a la calibracion vectorial top-1-to-k del paper.
 
 ## `2603.14092` - Soft Mean Expected Calibration Error (SMECE)
 
@@ -221,7 +223,7 @@ Aplicacion ahora: descartar TSFM en el camino critico. Reabrir solo con un proto
 
 Ahora:
 - Agregar suite `randomness` con uniformidad, runs, autocorrelacion serial, transiciones y drift de entropia.
-- Mejorar calibracion con ECE top-1, top-k, full multiclass e intervalos bootstrap.
+- Calibracion: ECE por ejecucion para confianza, clases y conjuntos top-k; cotas separadas para residuos condicionales en bins fijos. La calibracion conjunta requiere otro diagnostico.
 - Agregar p-values a alertas de heatmap.
 - Mantener evaluacion walk-forward, comparaciones pareadas y bootstrap.
 

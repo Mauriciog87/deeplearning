@@ -9,6 +9,7 @@ from src.probabilities import FAIR_PROBABILITY, validate_probabilities, Availabi
 from src.settlement import settle_bet, settle_action
 from src.datasets import as_sessions, dataset_manifest
 from src.utils.temporal_statistics import adaptive_bins, calibration_error, block_bootstrap_indices
+from src.utils.calibration import CalibrationBound, fixed_bin_calibration_bound
 import numpy as np
 import platform
 from importlib.metadata import version, PackageNotFoundError
@@ -146,12 +147,10 @@ class ModelEvaluationSummary:
     top_k_hit_rate_intervals: Dict[int, MetricInterval] = field(default_factory=dict)
     log_loss_interval: MetricInterval = field(default_factory=MetricInterval)
     brier_interval: MetricInterval = field(default_factory=MetricInterval)
-    ece_interval: MetricInterval = field(default_factory=MetricInterval)
     roi_interval: MetricInterval = field(default_factory=MetricInterval)
     classwise_ece: float = 0.0
-    classwise_ece_interval: MetricInterval = field(default_factory=MetricInterval)
     top_k_ece: Dict[int, float] = field(default_factory=dict)
-    top_k_ece_intervals: Dict[int, MetricInterval] = field(default_factory=dict)
+    calibration_bounds: Dict[str, CalibrationBound] = field(default_factory=dict)
     calibration_bins: List[CalibrationBin] = field(default_factory=list)
     comparisons: Dict[str, ModelComparisonSummary] = field(default_factory=dict)
     status: str = 'ready'
@@ -187,11 +186,21 @@ class WalkForwardEvaluationResult:
 def evaluate_walk_forward(numbers, config: Optional[EvaluationConfig] = None, cancel_event=None) -> WalkForwardEvaluationResult:
     config = config or EvaluationConfig()
     sessions = as_sessions(numbers)
-    manifest = {'schema_version': 2, 'dataset': dataset_manifest(sessions),
+    manifest = {'schema_version': 3, 'dataset': dataset_manifest(sessions),
                 'config': asdict(config), 'seeds': [config.seed + run for run in range(config.runs)],
                 'python': platform.python_version(), 'packages': {}, 'partitions': [],
                 'log_loss_probability_floor': EPSILON,
                 'interval_assumptions': 'Conditional on this dataset; approximately stationary circular temporal blocks within sessions, shared across resampled training seeds. Not evidence of future profit.'}
+    manifest['calibration_inference'] = {
+        'method': 'hilbert_azuma_dyadic_v1',
+        'target': CalibrationBound().target,
+        'bin_edges': np.linspace(0, 1, config.ece_bins + 1).tolist(),
+        'model_family_size': len(MODEL_ORDER),
+        'metric_family_size': 2 + len(set(config.top_k) - {1}),
+        'assumptions': 'All configured runs share the same outcomes. Forecasts, rankings and observation inclusion are chosen before each outcome. Bins and configuration are fixed before evaluation.',
+        'coverage': 'Simultaneous over time, the declared model family, and confidence/classwise/top-set summaries; conditional on the configured training runs. No guarantee across data-selected configurations.',
+        'interpretation': 'Conservative bounds for predictable fixed-bin residuals, not population l2-ECE intervals or proof of joint calibration. Adaptive ECE remains descriptive.',
+    }
     for package in ('numpy', 'scipy', 'scikit-learn', 'torch', 'gymnasium'):
         try:
             manifest['packages'][package] = version(package)
@@ -326,6 +335,15 @@ def format_evaluation_report(result: WalkForwardEvaluationResult) -> str:
     for model, summary in result.per_model_summaries.items():
         if summary.ece is not None:
             lines.append(f'{model}: confidence ECE {value(summary.ece)}; classwise ECE {value(summary.classwise_ece)}')
+    if result.config.compute_intervals:
+        lines.append('CALIBRATION BOUNDS: fixed-bin conditional residuals, simultaneous over time and the declared model/metric family.')
+        lines.append('These conservative bounds do not cover adaptive ECE or establish joint calibration. All runs must share outcomes; forecasts and inclusion must precede results.')
+        for model, summary in result.per_model_summaries.items():
+            for name, bound in summary.calibration_bounds.items():
+                if bound.status == 'available':
+                    lines.append(f'{model} {name}: {value(bound.point)} [{value(bound.lower)}, {value(bound.upper)}]; unique outcomes={bound.observations}')
+                else:
+                    lines.append(f'{model} {name}: unavailable ({bound.reason})')
     lines.append(f'PAIRED IMPROVEMENT VS {result.config.comparison_baseline}')
     for model, summary in result.per_model_summaries.items():
         for metric, comparison in summary.comparisons.items():
@@ -614,6 +632,37 @@ def _interval(point, values, config):
     return MetricInterval(point, lower, upper)
 
 
+def _calibration_bounds(rows, config):
+    if not rows or not config.compute_intervals:
+        return {}
+    names = ['confidence', 'classwise'] + [f'top_{k}' for k in sorted(set(config.top_k) - {1})]
+    runs = defaultdict(dict)
+    for row in rows:
+        identity = (row.session_id, row.index, row.spin_id)
+        if identity in runs[row.run_id]:
+            raise ValueError('Calibration inference cannot count an outcome twice in a run')
+        runs[row.run_id][identity] = row
+    keys = sorted(next(iter(runs.values())))
+    if set(runs) != set(range(config.runs)) or any(set(run) != set(keys) for run in runs.values()):
+        return {name: CalibrationBound(reason='All configured runs must cover the same observations') for name in names}
+    aligned = [[runs[run][key] for key in keys] for run in range(config.runs)]
+    actual = np.asarray([[row.actual for row in run] for run in aligned])
+    if not np.all(actual == actual[0]):
+        raise ValueError('Training runs disagree about an observed outcome')
+    probabilities = np.asarray([[[row.number_probs[n] for n in range(37)] for row in run] for run in aligned])
+    alpha = (1 - config.confidence_level) / (len(MODEL_ORDER) * len(names))
+    confidence = np.asarray([[row.confidence for row in run] for run in aligned])[:, :, None]
+    hits = np.asarray([[_row_exact_hit(row) for row in run] for run in aligned])[:, :, None]
+    result = {'confidence': fixed_bin_calibration_bound(confidence, hits, bins=config.ece_bins, alpha=alpha),
+              'classwise': fixed_bin_calibration_bound(probabilities, np.eye(37)[actual], bins=config.ece_bins,
+                                                       alpha=alpha, categorical=True)}
+    for k in sorted(set(config.top_k) - {1}):
+        mass = np.asarray([[sum(p for _, p in row.top_numbers[:k]) for row in run] for run in aligned])[:, :, None]
+        found = np.asarray([[_row_top_hit(row, k) for row in run] for run in aligned])[:, :, None]
+        result[f'top_{k}'] = fixed_bin_calibration_bound(mass, found, bins=config.ece_bins, alpha=alpha)
+    return result
+
+
 def _summarize_rows(rows, config, total_evaluation_spins, cancel_event=None):
     grouped = defaultdict(list)
     for row in rows:
@@ -626,10 +675,10 @@ def _summarize_rows(rows, config, total_evaluation_spins, cancel_event=None):
             for indices in block_bootstrap_indices(model_rows, config.bootstrap_resamples, config.seed, config.block_length):
                 if cancel_event is not None and cancel_event.is_set():
                     raise RuntimeError('Evaluation cancelled')
-                measured = _metric_values([model_rows[index] for index in indices], config)
+                measured = _metric_values([model_rows[index] for index in indices], config, calibration=False)
                 for key, value in measured.items():
                     samples[key].append(value)
-        intervals = {key: _interval(value, samples[key], config) for key, value in points.items()}
+        intervals = {key: _interval(value, samples[key], config) for key, value in points.items() if 'ece' not in key}
         trajectories = defaultdict(list)
         for row in model_rows:
             trajectories[(row.run_id, row.session_id)].append(row.profit)
@@ -646,10 +695,9 @@ def _summarize_rows(rows, config, total_evaluation_spins, cancel_event=None):
             exact_accuracy_interval=intervals['exact_accuracy'],
             top_k_hit_rate_intervals={k: intervals[f'top_{k}_hit'] for k in config.top_k},
             log_loss_interval=intervals['log_loss'], brier_interval=intervals['brier'],
-            ece_interval=intervals['ece'], roi_interval=intervals['roi'],
-            classwise_ece=points['classwise_ece'], classwise_ece_interval=intervals['classwise_ece'],
+            roi_interval=intervals['roi'], classwise_ece=points['classwise_ece'],
             top_k_ece={k: points[f'top_{k}_ece'] for k in config.top_k},
-            top_k_ece_intervals={k: intervals[f'top_{k}_ece'] for k in config.top_k},
+            calibration_bounds=_calibration_bounds(forecasts, config),
             calibration_bins=_calibration_bins(forecasts, config.ece_bins),
             net_profit=sum(row.profit for row in model_rows) / runs,
             total_stake=sum(_row_stake(row, config.bet_top_n) for row in model_rows) / runs,
