@@ -177,7 +177,7 @@ Lectura tecnica: propone usar baterias adaptativas: correr tests baratos primero
 
 Supuestos: muchas pruebas posibles y secuencias de longitud variable. En el repo, conviene empezar con tests baratos y claros antes de NIST/TestU01.
 
-Aplicacion ahora: incluir tests secuenciales ligeros y mostrar advertencias por muestra corta. Futuro: bateria adaptativa real si se exportan secuencias largas.
+Aplicación actual: una batería batch reproducible con advertencias por muestra corta. No se reproduce la asignación adaptativa de cómputo del paper. Los monitores secuenciales nuevos tienen contratos separados; mirar repetidamente los p-values de esta batería no adquiere por ello una garantía secuencial.
 
 ## `2310.10688` - A Decoder-Only Foundation Model for Time-Series Forecasting
 
@@ -259,7 +259,7 @@ Decision: implement_now.
 
 Lectura: detecta cambios secuenciales cuando el pre-change es conocido y el post-change desconocido, usando bins y conteos. Ruleta 0-36 ya es un sistema de bins naturales.
 
-Implementacion ahora: agregar test de cambio categorial por ventanas izquierda/derecha al comando `randomness`.
+Aplicación actual: `randomness` compara ventanas categóricas y toma el máximo sobre los splits candidatos; vuelve a calcular ese máximo en cada permutación para incluir la selección en el test. Es un diagnóstico batch bajo intercambioabilidad, no una reproducción del algoritmo de quickest change detection.
 
 ### `2506.01452` - e-GAI for Online FDR Control
 
@@ -299,7 +299,7 @@ Decision: implement_now.
 
 Lectura: estima orden Markov en secuencias simbolicas con tests de informacion condicional. Para ruleta, esto pregunta si hay dependencia temporal real.
 
-Implementacion ahora: agregar scan simple de dependencia por lag en `randomness`, con p-values ajustados.
+Aplicación actual: `randomness` recalcula el máximo entre los lags considerados en cada permutación y aplica la corrección de la familia batch. No implementa el estimador de orden Markov ni el test de información mutua condicional del paper. Una alarma de dependencia no identifica por sí sola un orden Markov predictivamente útil.
 
 ### `1710.01787` - On Kelly Betting: Some Limitations
 

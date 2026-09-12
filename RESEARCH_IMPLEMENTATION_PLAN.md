@@ -148,7 +148,7 @@ Each payoff has squared norm at most 3. If the achieved pre-outcome halfspace up
 | Reassess prior RL and OPE choices | Double DQN action selection/evaluation, masks, termination and continuation match their tested contracts. Passive full-information replay needs no propensity weighting under its stated action-independence assumptions. |
 | Reconcile source attributions and exclusions | README and `arxiv_paper_memory.md` distinguish exact formulas from adaptations. Physical prediction, unsupported TSFM additions and unnecessary IPS/DR remain excluded for the reasons in the original audit. No experiment is automatically promoted. |
 
-The final measured campaign results and full-suite outcome are recorded below when execution finishes. Real-data validation cannot establish superiority at this point: a read-only audit found zero sessions, spins and predictions. Capture configuration SHA-256 was `8292b5b495d2dd5b89557ec7586c75065c11f589bc29b32cdafd6e79041a0c72`; none of the research changes modifies that configuration or the user database.
+The measured campaign results and full-suite outcome are recorded below. Real-data validation cannot establish superiority at this point: a read-only audit found zero sessions, spins and predictions. Capture configuration SHA-256 was `8292b5b495d2dd5b89557ec7586c75065c11f589bc29b32cdafd6e79041a0c72`; none of the research changes modifies that configuration or the user database.
 
 ### Core campaign results
 
@@ -169,3 +169,46 @@ The command exited successfully after 1,238.6 seconds. [The JSON artifact](resea
 | Uniform-wheel policies | Frequency-based EV bet on every observation: mean realized profit -42.4 units, approximate 95% interval [-146.61, 61.81], and known conditional expected profit -27.027. The confidence-bound policy chose PASS throughout and earned zero. All PASS counterfactual totals were zero. |
 
 The strong bias scenario deliberately sets one pocket's probability to 0.15. Large positive simulated profits there illustrate the decision/settlement contract and must not be extrapolated to a real wheel. The mixture's improvement over KT and the e-detectors' change sensitivity are specific to these alternatives, priors and horizons; the trial intervals are not simultaneous over all comparisons. Reference/PIT results under stationary dependence remain labeled as violated assumptions.
+
+### Recalibration campaign results
+
+Command: `C:/Python312/python.exe -B roulette_cli.py research --seed 20260912 --trials 5 --observations 300 --recalibrators temperature mcllo normalized_isotonic --include-online --online-iterations 30 --output research/results/recalibration-20260912.json`.
+
+The command completed 40 trials in 470.2 seconds. [The artifact](research/results/recalibration-20260912.json) retains all fitted parameters and measurements; all recorded runtime hashes match the checkout. All 120 offline fits were available and their solvers reported success. Numerical success did not automatically certify optimality: four of 40 isotonic fits exceeded the declared `1e-6` gap threshold, with maximum gap `2.9196e-5`; their `optimization_certified` fields remain false.
+
+In the overconfidence scenario, paired held-out log-loss differences versus the same uncalibrated forecast were:
+
+| Method | Mean difference | Approximate 95% interval |
+|---|---:|---:|
+| Temperature | -0.99083 | [-1.18421, -0.79746] |
+| MCLLO | -0.85782 | [-1.04918, -0.66646] |
+| Normalized isotonic | -0.84643 | [-0.98689, -0.70598] |
+| Online finite-basis variant | +11.85566 | [10.00195, 13.70936] |
+
+Temperature had the largest mean reduction in this deliberately temperature-distorted scenario; that is not a general ranking. On uniform data, MCLLO worsened log loss by 0.05218, interval [0.01158, 0.09278], demonstrating calibration-set overfitting. On fixed bias it improved the uniform base, while temperature and isotonic could not separate identical class scores.
+
+The online variant worsened mean log loss in all eight scenarios, including +1.01660 [0.95361, 1.07959] under uniformity. Of 12,000 pre-outcome oracle steps, 11,790 had a nonpositive computed bound; the maximum positive residual was 0.012254. Every final cone distance stayed within its reported bound, with maximum observed distance 0.026122. This does not rescue predictive quality: a finite-basis, finite-horizon bound involving Brier/2 does not control log loss, especially near zero assigned probabilities. The unfavorable result is retained and the variant stays opt-in; it is not recommended for deployment based on this campaign.
+
+### Representation campaign results
+
+Command: `C:/Python312/python.exe -B roulette_cli.py research --seed 20260912 --trials 5 --observations 300 --scenarios uniform dependence fixed_bias --learned-models extra_trees lstm_one_hot lstm_ordinal --device cpu --neural-epochs 3 --output research/results/representation-20260912.json`.
+
+The command completed 15 trials in 73.4 seconds. All 45 model fits were available; runtime hashes match the checkout. [The artifact](research/results/representation-20260912.json) records chronological partitions, scores, exposure and model fit reports. Paired differences below use the five shared trial outcomes in each scenario, with Student-t intervals:
+
+| Scenario | One-hot minus ordinal log loss | Approximate 95% interval |
+|---|---:|---:|
+| Uniform | -0.00215 | [-0.00963, 0.00534] |
+| Stationary dependence | +0.00613 | [-0.00680, 0.01906] |
+| Fixed bias | +0.00080 | [-0.01258, 0.01418] |
+
+Every interval contains zero. One-hot remains the explicit categorical input contract, but this short campaign does not establish superiority over ordinal inputs. The fixed-bias frequency baseline had mean log loss 3.50284, compared with 3.50644/3.50563 for the LSTMs and 3.71581 for ExtraTrees. Under uniformity, the fair forecast remained preferable to these fitted alternatives. Neither larger neural models nor foundation-model integration is justified by these results.
+
+The three campaigns are not pooled as independent replications: some scenarios reuse seeded prefixes. All model choices and budgets were fixed before inspecting outcomes.
+
+### Final verification and disposition
+
+`C:/Python312/python.exe -B scripts/run_checks.py --profile full` completed successfully: **162 tests passed in 68.103 seconds**, without skipped tests. This includes formula/gradient checks, null simulations, temporal partitions, settlement, model train/save/resume, CLI exports, persisted monitors and the isolated optional-dependency import regression. The three actual research CLI campaigns also exited successfully. Source hashes matched for every campaign; datasets and capture settings were preserved.
+
+All eight work packages are complete. Scientific limitations are results of the audit, not claims of successful external validation: the database has no eligible real observations; the fixed-reference variant lacked power in the chosen scenarios; the online variant harmed log loss; four isotonic fits missed the numerical certificate threshold; and the representation comparison did not establish superiority. These findings remain in the exported artifacts and the experimental methods remain opt-in. No additional implementation is justified automatically by this campaign.
+
+Delivery consists of incremental local commits, the implementation, tests, source notes and all three result artifacts. Publication is outside this goal's authorization.
