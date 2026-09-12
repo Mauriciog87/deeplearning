@@ -116,6 +116,7 @@ class CalibrationBin:
     count: int = 0
     avg_confidence: float = 0.0
     accuracy: float = 0.0
+    run_id: int = 0
 
 
 @dataclass
@@ -320,7 +321,8 @@ def format_evaluation_report(result: WalkForwardEvaluationResult) -> str:
                 lines.append(f'{model}: log loss {_format_interval(summary.log_loss_interval)}; '
                              f'Brier {_format_interval(summary.brier_interval)}; ROI {_format_interval(summary.roi_interval)}')
     lines.append('CALIBRATION RELIABILITY')
-    lines.append('Classwise ECE averages class errors; adaptive bins keep tied probabilities together (target: 20 observations/bin).')
+    lines.append('ECE is computed within each run, then averaged across runs. Classwise ECE averages class errors; it does not establish joint calibration.')
+    lines.append('Adaptive bins keep tied probabilities together (target: 20 observations/bin/run). Top-k calibration concerns the selected set probability.')
     for model, summary in result.per_model_summaries.items():
         if summary.ece is not None:
             lines.append(f'{model}: confidence ECE {value(summary.ece)}; classwise ECE {value(summary.classwise_ece)}')
@@ -577,21 +579,29 @@ def _metric_values(rows, config, calibration=True):
         outcomes = np.asarray([row.actual for row in forecasts])
         positions = np.arange(len(forecasts))
         hits = np.asarray([_row_exact_hit(row) for row in forecasts])
-        confidence = np.asarray([row.confidence for row in forecasts])
         truth = np.eye(37)[outcomes]
         values.update(exact_accuracy=float(hits.mean()),
                       log_loss=float(-np.log(np.maximum(EPSILON, probabilities[positions, outcomes])).mean()),
                       brier=float(np.sum((probabilities - truth) ** 2, axis=1).mean()))
         if calibration:
-            values['ece'] = calibration_error(confidence, hits, config.ece_bins)
-            values['classwise_ece'] = float(np.mean([calibration_error(probabilities[:, n], truth[:, n], config.ece_bins) for n in range(37)]))
+            values.update(_run_calibration_values(forecasts, config))
         for k in config.top_k:
             top_hits = np.asarray([_row_top_hit(row, k) for row in forecasts])
             values[f'top_{k}_hit'] = float(top_hits.mean())
-            if calibration:
-                top_confidence = [sum(probability for _, probability in row.top_numbers[:k]) for row in forecasts]
-                values[f'top_{k}_ece'] = calibration_error(top_confidence, top_hits, config.ece_bins)
     return values
+
+
+def _run_calibration_values(rows, config):
+    runs = defaultdict(list)
+    for row in rows:
+        runs[row.run_id].append(row)
+    estimates = defaultdict(list)
+    for run_rows in runs.values():
+        estimates['ece'].append(_ece(run_rows, config.ece_bins))
+        estimates['classwise_ece'].append(_classwise_ece(run_rows, config.ece_bins))
+        for k in config.top_k:
+            estimates[f'top_{k}_ece'].append(_top_k_ece(run_rows, k, config.ece_bins))
+    return {metric: float(np.mean(values)) for metric, values in estimates.items()}
 
 
 def _interval(point, values, config):
@@ -844,8 +854,13 @@ def _binned_calibration_error(pairs: List[Tuple[float, float]], bins: int) -> fl
 
 
 def _calibration_bins(rows: List[PredictionEvaluationRow], bins: int) -> List[CalibrationBin]:
-    return [CalibrationBin(*values) for values in adaptive_bins(
-        [row.confidence for row in rows], [_row_exact_hit(row) for row in rows], bins)]
+    runs = defaultdict(list)
+    for row in rows:
+        runs[row.run_id].append(row)
+    return [CalibrationBin(*values, run_id=run_id)
+            for run_id, run_rows in sorted(runs.items())
+            for values in adaptive_bins([row.confidence for row in run_rows],
+                                        [_row_exact_hit(row) for row in run_rows], bins)]
 
 
 def _roi(rows: List[PredictionEvaluationRow], bet_top_n: int):

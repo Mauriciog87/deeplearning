@@ -59,3 +59,4 @@ Baseline: `7f6d915`. Scope: implement the recommendations from the paper audit, 
 ## Progress
 
 - Planning: inspected the clean baseline and linked worktree. The current database is preserved. Implementation and verification are pending.
+- Stage 1a: regression tests reproduced seed-replica dependence, cancellation between different run errors, and the 40-observation bin boundary failure. Fixed per-run aggregation, bin boundaries, and run-tagged reliability data. `C:/Python312/python.exe -B -m unittest test_calibration_contract test_temporal_evaluation test_temporal_bootstrap -v`: 9 tests passed. Interval replacement and joint diagnostics remain pending.

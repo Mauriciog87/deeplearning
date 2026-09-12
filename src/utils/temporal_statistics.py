@@ -14,7 +14,7 @@ def adaptive_bins(confidences, outcomes, max_bins=10, min_bin_size=20):
     target_bins = min(max_bins, max(1, len(confidence) // min_bin_size))
     boundaries = [0]
     for target in np.linspace(0, len(confidence), target_bins + 1)[1:-1]:
-        split = int(np.searchsorted(confidence, confidence[min(int(target), len(confidence) - 1)], side='right'))
+        split = int(np.searchsorted(confidence, confidence[max(0, int(target) - 1)], side='right'))
         if split - boundaries[-1] >= min_bin_size and len(confidence) - split >= min_bin_size:
             boundaries.append(split)
     boundaries.append(len(confidence))

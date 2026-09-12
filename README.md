@@ -90,7 +90,7 @@ Overlapping test folds are rejected. LSTM and ExtraTrees are fitted only on each
 
 Each forecast supplies a validated probability vector over all 37 outcomes and a complete ranking. Number and category displays come from the same vector, including zero. Q-values are not converted to outcome probabilities.
 
-The harness reports Top-1/3/5/10, log loss, multiclass Brier score, confidence ECE, classwise ECE, top-k calibration, actual exposure, net profit, ROI and drawdown. Log loss uses a reported probability floor of 1e-12. Tied probabilities stay together in calibration bins; classwise ECE computes each class error before averaging.
+The harness reports Top-1/3/5/10, log loss, multiclass Brier score, confidence ECE, classwise ECE, top-k calibration, actual exposure, net profit, ROI and drawdown. Log loss uses a reported probability floor of 1e-12. Calibration errors and adaptive bins are computed separately within each training run, then errors are averaged across runs with equal weight. Repeating identical runs does not change these metrics. Tied probabilities stay together; classwise ECE computes each class error before averaging. Classwise calibration does not establish joint calibration, and top-k calibration concerns the probability of the selected set. Exported reliability bins include their run ID.
 
 With five straight bets, a hit earns +31 units net and a miss loses 5. An unaffordable betting projection becomes PASS. Capital carries across folds within each model/run/session. ROI divides total net profit by total money staked. PASS has zero profit and no defined ROI. Policy-only rows have no forecast scores.
 
